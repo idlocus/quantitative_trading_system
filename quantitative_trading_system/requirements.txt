@@ -1,0 +1,36 @@
+# 核心依赖
+python>=3.8
+pandas
+numpy
+scipy
+
+# 数据处理
+TA-Lib
+pandas-ta
+
+# 数据库
+sqlite3
+psycopg2-binary
+
+# API对接
+requests
+websocket-client
+python-binance
+ccxt
+
+# 可视化
+matplotlib
+plotly
+dash
+dash-bootstrap-components
+
+# 测试
+pytest
+pytest-cov
+
+# 工具
+python-dotenv
+logging
+
+# 性能优化
+numba
