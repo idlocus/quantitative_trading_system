@@ -95,6 +95,43 @@ def run_market_summary_job():
     logger.info("市场总结任务已在后台启动")
 
 
+def run_dl_prediction_job():
+    """执行深度学习预测任务"""
+    import threading
+
+    def job_in_thread():
+        """在后台线程中执行深度学习预测"""
+        import subprocess
+        import os
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(base_dir, 'run_dl_prediction.py')
+
+        # 如果预测脚本不存在，跳过
+        if not os.path.exists(script_path):
+            logger.warning(f"深度学习预测脚本不存在: {script_path}")
+            return
+
+        try:
+            result = subprocess.run(
+                [sys.executable, script_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=base_dir,
+                timeout=600  # 10分钟超时
+            )
+            if result.returncode == 0:
+                logger.info("深度学习预测任务执行完成")
+            else:
+                logger.error(f"深度学习预测任务执行失败，返回码: {result.returncode}")
+        except subprocess.TimeoutExpired:
+            logger.error("深度学习预测任务执行超时（10分钟）")
+
+    # 启动后台线程执行任务
+    thread = threading.Thread(target=job_in_thread, daemon=True)
+    thread.start()
+    logger.info("深度学习预测任务已在后台启动")
+
+
 def init_scheduler():
     """初始化调度器"""
     scheduler = BackgroundScheduler()
@@ -128,10 +165,25 @@ def init_scheduler():
         replace_existing=True
     )
 
+    # 每天下午4点30分执行深度学习预测
+    trigger_dl = CronTrigger(
+        hour=16,
+        minute=30,
+        timezone='Asia/Shanghai'
+    )
+    scheduler.add_job(
+        run_dl_prediction_job,
+        trigger=trigger_dl,
+        id='dl_prediction',
+        name='深度学习信号预测',
+        replace_existing=True
+    )
+
     scheduler.start()
     logger.info("调度器已启动")
     logger.info("  - 每天早上7点: 每日投资建议")
     logger.info("  - 每天下午16:00: 市场总结")
+    logger.info("  - 每天下午16:30: 深度学习预测")
     return scheduler
 
 
@@ -161,6 +213,13 @@ def manual_summary():
     """手动触发市场总结任务"""
     run_market_summary_job()
     return {'status': '市场总结任务已触发', 'time': datetime.now().isoformat()}
+
+
+@app.route('/dl-predict')
+def manual_dl_predict():
+    """手动触发深度学习预测任务"""
+    run_dl_prediction_job()
+    return {'status': '深度学习预测任务已触发', 'time': datetime.now().isoformat()}
 
 
 @app.route('/health')
