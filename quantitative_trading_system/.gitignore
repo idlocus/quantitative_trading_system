@@ -28,8 +28,12 @@ env/
 build/
 dist/
 
+# uv
+uv.lock
+.venv/
+
 # Data
-/data/
+/data_cache/
 *.db
 *.sqlite
 *.sqlite3
@@ -53,3 +57,10 @@ logs/
 secrets/
 *.key
 *.pem
+
+# Data & Reports (本地数据不上传)
+/data/
+/archive/
+/analysis_reports/
+/reports/
+/results/

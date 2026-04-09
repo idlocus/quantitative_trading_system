@@ -48,17 +48,24 @@ class Backtester:
             # 初始化回测状态
             capital = self.initial_capital
             position = 0
-            current_price = 0
             equity = [capital]
             timestamps = []
+            trades = []
             
-            # 模拟时间序列
-            for i, (timestamp, row) in enumerate(data.iterrows()):
-                timestamps.append(timestamp)
-                current_price = row['close']
+            # 预处理数据 - 计算所有指标
+            self.logger.debug("预处理数据，计算指标")
+            strategy.preprocess_data(data)
+            
+            # 模拟时间序列 - 使用itertuples提高效率
+            self.logger.debug(f"开始回测循环，共 {len(data)} 条数据")
+            for row in data.itertuples():
+                timestamp = row.Index
+                current_price = row.close
                 
-                # 处理数据
-                signal = strategy.on_data(row.to_frame().T)
+                timestamps.append(timestamp)
+                
+                # 处理数据 - 直接传递行数据，避免创建DataFrame
+                signal = strategy.on_data(row)
                 
                 # 执行交易
                 if signal and signal['type'] != 'hold':
@@ -73,7 +80,7 @@ class Backtester:
                     if trade_result:
                         capital = trade_result['capital']
                         position = trade_result['position']
-                        self.trades.append(trade_result)
+                        trades.append(trade_result)
                 
                 # 计算当前权益
                 current_equity = capital + (position * current_price if position != 0 else 0)
@@ -85,16 +92,17 @@ class Backtester:
                 'equity': equity[:-1]
             }).set_index('timestamp')
             
+            self.trades = trades
             self.results = {
                 'initial_capital': self.initial_capital,
                 'final_capital': equity[-1],
                 'total_return': (equity[-1] / self.initial_capital - 1) * 100,
                 'max_drawdown': self._calculate_max_drawdown(self.equity_curve),
                 'sharp_ratio': self._calculate_sharp_ratio(self.equity_curve),
-                'trade_count': len(self.trades),
-                'win_rate': self._calculate_win_rate(self.trades),
+                'trade_count': len(trades),
+                'win_rate': self._calculate_win_rate(trades),
                 'equity_curve': self.equity_curve,
-                'trades': self.trades
+                'trades': trades
             }
             
             self.logger.info(f"回测完成，总收益: {self.results['total_return']:.2f}%")
@@ -133,8 +141,8 @@ class Backtester:
             capital = position * executed_price - cost
             position = 0
         
-        trade_result['after_capital'] = capital
-        trade_result['after_position'] = position
+        trade_result['capital'] = capital
+        trade_result['position'] = position
         trade_result['profit'] = capital + (position * executed_price if position != 0 else 0) - trade_result['before_capital']
         
         return trade_result
@@ -228,7 +236,7 @@ class Backtester:
         import os
         
         # 确保结果目录存在
-        result_dir = 'backtest_results'
+        result_dir = 'results/backtests'
         os.makedirs(result_dir, exist_ok=True)
         
         # 生成文件名

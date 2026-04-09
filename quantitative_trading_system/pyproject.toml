@@ -1,0 +1,64 @@
+[project]
+name = "quantitative-trading-system"
+version = "0.1.0"
+description = "量化交易系统 - 基于技术分析的投资框架"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Quant Team"}
+]
+dependencies = [
+    "pandas>=1.4.0",
+    "numpy>=1.21.0",
+    "scipy>=1.7.0",
+    "TA-Lib>=0.4.28",
+    "pandas-ta>=0.3.14",
+    "requests>=2.28.0",
+    "websocket-client>=1.4.0",
+    "python-binance>=1.0.16",
+    "ccxt>=3.0.0",
+    "matplotlib>=3.5.0",
+    "plotly>=5.10.0",
+    "dash>=2.9.0",
+    "dash-bootstrap-components>=1.2.0",
+    "pytest>=7.1.0",
+    "pytest-cov>=3.0.0",
+    "python-dotenv>=0.21.0",
+    "numba>=0.56.0",
+    "python-docx>=0.8.11",
+    "akshare>=1.12.0",
+    "oracledb>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --cov=. --cov-report=term-missing"

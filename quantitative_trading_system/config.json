@@ -1,0 +1,24 @@
+{
+  "data_config": {
+    "source_type": "wind",
+    "symbols": ["300750.SZ"],
+    "historical_days": 730
+  },
+  "strategy_config": {
+    "name": "TrendFollowing",
+    "params": {
+      "fast_period": 10,
+      "slow_period": 20,
+      "signal_period": 9,
+      "stop_loss_pct": 0.05,
+      "take_profit_pct": 0.15,
+      "trailing_stop_pct": 0.08,
+      "position_size": 1.0
+    }
+  },
+  "backtest_config": {
+    "initial_capital": 100000,
+    "commission": 0.001,
+    "slippage": 0.0005
+  }
+}

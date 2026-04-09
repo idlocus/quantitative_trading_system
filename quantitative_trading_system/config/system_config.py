@@ -32,6 +32,7 @@ class SystemConfig:
         
         # 数据配置
         self.data_config = {
+            'source_type': os.getenv('DATA_SOURCE_TYPE', 'mock'),
             'sources': {
                 'binance': {
                     'api_key': os.getenv('BINANCE_API_KEY', ''),
@@ -48,9 +49,18 @@ class SystemConfig:
         self.strategy_config = {
             'name': os.getenv('STRATEGY_NAME', 'TrendFollowing'),
             'params': {
+                # 趋势跟踪策略参数
                 'fast_period': int(os.getenv('FAST_PERIOD', '10')),
                 'slow_period': int(os.getenv('SLOW_PERIOD', '20')),
-                'signal_period': int(os.getenv('SIGNAL_PERIOD', '9'))
+                'signal_period': int(os.getenv('SIGNAL_PERIOD', '9')),
+                # 动量突破策略参数
+                'momentum_period': int(os.getenv('MOMENTUM_PERIOD', '20')),
+                'breakout_period': int(os.getenv('BREAKOUT_PERIOD', '50')),
+                'rsi_period': int(os.getenv('RSI_PERIOD', '14')),
+                'rsi_overbought': int(os.getenv('RSI_OVERBOUGHT', '70')),
+                'rsi_oversold': int(os.getenv('RSI_OVERSOLD', '30')),
+                'stop_loss_pct': float(os.getenv('STOP_LOSS_PCT', '0.03')),
+                'take_profit_pct': float(os.getenv('TAKE_PROFIT_PCT', '0.06'))
             }
         }
         
