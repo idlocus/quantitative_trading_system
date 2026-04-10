@@ -92,39 +92,38 @@ class WindBatchLoader:
         end_date = datetime.now().strftime('%Y%m%d')
         start_date = (datetime.now() - timedelta(days=self.days * 2)).strftime('%Y%m%d')
 
-        cursor = conn.cursor()
         try:
-            sql = f"""
-                SELECT TRADE_DT, S_DQ_OPEN, S_DQ_HIGH, S_DQ_LOW, S_DQ_CLOSE, S_DQ_VOLUME
-                FROM ASHAREEODPRICES
-                WHERE S_INFO_WINDCODE = '{symbol}'
-                AND TRADE_DT >= '{start_date}'
-                AND TRADE_DT <= '{end_date}'
-                AND S_DQ_CLOSE IS NOT NULL
-                AND S_DQ_OPEN IS NOT NULL
-                AND S_DQ_HIGH IS NOT NULL
-                AND S_DQ_LOW IS NOT NULL
-                AND S_DQ_VOLUME IS NOT NULL
-                ORDER BY TRADE_DT ASC
-            """
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            cursor.close()
-
-            if not rows or len(rows) < self.min_days:
-                return None
-
-            df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
-            df['date'] = pd.to_datetime(df['date'].astype(str), format='%Y%m%d')
-            df = df.set_index('date')
-
-            # 只保留最近5年数据
-            df = df.tail(self.days)
-
-            return df[['open', 'high', 'low', 'close', 'volume']]
+            with conn.cursor() as cursor:
+                sql = f"""
+                    SELECT TRADE_DT, S_DQ_OPEN, S_DQ_HIGH, S_DQ_LOW, S_DQ_CLOSE, S_DQ_VOLUME
+                    FROM ASHAREEODPRICES
+                    WHERE S_INFO_WINDCODE = '{symbol}'
+                    AND TRADE_DT >= '{start_date}'
+                    AND TRADE_DT <= '{end_date}'
+                    AND S_DQ_CLOSE IS NOT NULL
+                    AND S_DQ_OPEN IS NOT NULL
+                    AND S_DQ_HIGH IS NOT NULL
+                    AND S_DQ_LOW IS NOT NULL
+                    AND S_DQ_VOLUME IS NOT NULL
+                    ORDER BY TRADE_DT ASC
+                """
+                cursor.execute(sql)
+                rows = cursor.fetchall()
         except Exception as e:
-            cursor.close()
+            logger.warning(f"Failed to load stock data for {symbol}: {e}")
             return None
+
+        if not rows or len(rows) < self.min_days:
+            return None
+
+        df = pd.DataFrame(rows, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        df['date'] = pd.to_datetime(df['date'].astype(str), format='%Y%m%d')
+        df = df.set_index('date')
+
+        # 只保留最近5年数据
+        df = df.tail(self.days)
+
+        return df[['open', 'high', 'low', 'close', 'volume']]
 
     def load_batch(
         self,
@@ -171,9 +170,9 @@ class WindBatchLoader:
     ) -> List[List[str]]:
         """将股票列表分成批次"""
         if shuffle:
-            random.seed(seed)
+            rng = random.Random(seed)
             stocks = stocks.copy()
-            random.shuffle(stocks)
+            rng.shuffle(stocks)
 
         batches = []
         for i in range(0, len(stocks), batch_size):
