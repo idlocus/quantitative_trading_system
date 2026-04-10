@@ -32,10 +32,18 @@ class TrainingState:
 class CheckpointManager:
     """检查点管理器"""
 
-    def __init__(self, checkpoint_dir: str, model_name: str = "lstm_wind"):
+    def __init__(
+        self,
+        checkpoint_dir: str,
+        model_name: str = "lstm_wind",
+        total_batches: int = 12,
+        stocks_per_batch: int = 500,
+    ):
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.model_name = model_name
+        self.total_batches = total_batches
+        self.stocks_per_batch = stocks_per_batch
         self.state_file = self.checkpoint_dir / "training_state.json"
 
     def get_batch_checkpoint_path(self, batch_index: int) -> Path:
@@ -84,12 +92,16 @@ class CheckpointManager:
 
     def load_checkpoint(self, checkpoint_path: str) -> Dict[str, Any]:
         """加载检查点"""
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"检查点文件不存在: {checkpoint_path}")
+        try:
+            if not os.path.exists(checkpoint_path):
+                raise FileNotFoundError(f"检查点文件不存在: {checkpoint_path}")
 
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        logger.info(f"检查点已加载: {checkpoint_path}")
-        return checkpoint
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+            logger.info(f"检查点已加载: {checkpoint_path}")
+            return checkpoint
+        except Exception as e:
+            logger.error(f"加载检查点失败: {e}")
+            raise
 
     def load_latest_checkpoint(self) -> Optional[Dict[str, Any]]:
         """加载最新的批次检查点"""
@@ -118,12 +130,11 @@ class CheckpointManager:
         """保存训练状态"""
         existing_state = self.load_training_state() or {
             'completed_batches': [],
-            'total_batches': 12,
-            'stocks_per_batch': 500,
+            'total_batches': self.total_batches,
+            'stocks_per_batch': self.stocks_per_batch,
         }
 
-        if batch_index not in existing_state.get('completed_batches', []):
-            existing_state['completed_batches'] = existing_state.get('completed_batches', [])
+        if batch_index not in existing_state['completed_batches']:
             existing_state['completed_batches'].append(batch_index)
 
         existing_state['batch_index'] = batch_index
@@ -132,16 +143,24 @@ class CheckpointManager:
         existing_state['patience_counter'] = patience_counter
         existing_state['timestamp'] = datetime.now().isoformat()
 
-        with open(self.state_file, 'w') as f:
-            json.dump(existing_state, f, indent=2)
+        try:
+            with open(self.state_file, 'w') as f:
+                json.dump(existing_state, f, indent=2)
+        except Exception as e:
+            logger.error(f"保存训练状态失败: {e}")
+            raise
 
     def load_training_state(self) -> Optional[Dict[str, Any]]:
         """加载训练状态"""
         if not self.state_file.exists():
             return None
 
-        with open(self.state_file, 'r') as f:
-            return json.load(f)
+        try:
+            with open(self.state_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"加载训练状态失败: {e}")
+            return None
 
     def get_next_batch_index(self) -> int:
         """获取下一个要训练的批次索引"""
@@ -150,7 +169,7 @@ class CheckpointManager:
             return 1
 
         completed = state.get('completed_batches', [])
-        total_batches = state.get('total_batches', 12)
+        total_batches = state.get('total_batches', self.total_batches)
 
         for i in range(1, total_batches + 1):
             if i not in completed:
@@ -165,7 +184,7 @@ class CheckpointManager:
             return False
 
         completed = set(state.get('completed_batches', []))
-        total = state.get('total_batches', 12)
+        total = state.get('total_batches', self.total_batches)
         expected = set(range(1, total + 1))
 
         return completed >= expected
