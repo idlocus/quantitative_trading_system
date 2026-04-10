@@ -59,6 +59,11 @@ def parse_args():
     parser.add_argument('--resume', action='store_true', help='从上次中断处恢复')
     parser.add_argument('--batch-num', type=int, default=None, help='从指定批次开始')
     parser.add_argument('--patience', type=int, default=5, help='早停patience')
+    parser.add_argument('--sequence-length', type=int, default=60, help='序列长度')
+    parser.add_argument('--train-ratio', type=float, default=0.7, help='训练集比例')
+    parser.add_argument('--hidden-size', type=int, default=128, help='LSTM隐藏层大小')
+    parser.add_argument('--num-layers', type=int, default=2, help='LSTM层数')
+    parser.add_argument('--dropout', type=float, default=0.3, help='Dropout比例')
     return parser.parse_args()
 
 
@@ -106,10 +111,10 @@ def train_single_batch(
     logger.info(f"准备训练数据 ({result.loaded_count} 只股票)...")
     X_train, y_train, X_val, y_val, X_test, y_test = prepare_training_data(
         result.symbol_data,
-        sequence_length=60,
+        sequence_length=args.sequence_length,
         up_threshold=args.up_threshold,
         down_threshold=args.down_threshold,
-        train_ratio=0.7
+        train_ratio=args.train_ratio
     )
 
     # 释放原始数据内存
@@ -135,7 +140,13 @@ def train_single_batch(
 
     # 创建模型
     n_features = X_train.shape[2]
-    model = create_model(input_size=n_features, hidden_size=128, num_layers=2, dropout=0.3, num_classes=3)
+    model = create_model(
+        input_size=n_features,
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+        dropout=args.dropout,
+        num_classes=3
+    )
 
     # 训练
     logger.info(f"开始训练 (epochs={args.epochs})...")
@@ -174,7 +185,8 @@ def train_single_batch(
     del train_loader, val_loader, test_loader
     del model
     gc.collect()
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     log_resource_usage()
     logger.info(f"批次 {batch_index} 训练完成")
@@ -250,19 +262,23 @@ def main():
             logger.info(f"跳过批次 {batch_index} (已训练)")
             continue
 
-        success = train_single_batch(
-            batch_index=batch_index,
-            symbols=batch_symbols,
-            args=args,
-            batch_loader=batch_loader,
-            checkpoint_manager=checkpoint_manager
-        )
+        try:
+            success = train_single_batch(
+                batch_index=batch_index,
+                symbols=batch_symbols,
+                args=args,
+                batch_loader=batch_loader,
+                checkpoint_manager=checkpoint_manager
+            )
+        except Exception as e:
+            logger.error(f"批次 {batch_index} 训练异常: {e}")
+            success = False
 
         if not success:
             logger.warning(f"批次 {batch_index} 训练失败，继续下一批")
 
     # 训练完成，检查所有批次
-    if checkpoint_manager.is_training_complete() or start_batch == 1:
+    if checkpoint_manager.is_training_complete():
         logger.info("=" * 60)
         logger.info("所有批次训练完成!")
         logger.info(f"最终模型: {args.output_dir}/lstm_wind_final.pt")
