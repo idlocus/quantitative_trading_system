@@ -70,13 +70,15 @@ class CheckpointManager:
 
         checkpoint = {
             'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
             'epoch': epoch,
             'best_val_loss': best_val_loss,
             'patience_counter': patience_counter,
             'batch_index': batch_index,
             'timestamp': datetime.now().isoformat(),
         }
+
+        if optimizer is not None:
+            checkpoint['optimizer_state_dict'] = optimizer.state_dict()
 
         if scheduler is not None:
             checkpoint['scheduler_state_dict'] = scheduler.state_dict()
