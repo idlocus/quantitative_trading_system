@@ -5,6 +5,7 @@
 """
 
 from .engine import BacktestEngine, BacktestResult, Trade, BacktestConfig, MarketData
+from .reporter import BacktestReporter
 
 __all__ = [
     "BacktestEngine",
@@ -12,4 +13,5 @@ __all__ = [
     "Trade",
     "BacktestConfig",
     "MarketData",
+    "BacktestReporter",
 ]
