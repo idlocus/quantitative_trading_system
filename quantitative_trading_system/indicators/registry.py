@@ -9,6 +9,33 @@ from typing import Callable, Dict, List, Optional, Any
 import pandas as pd
 
 
+def detect_cross_signal(series1: pd.Series, series2: pd.Series) -> Optional[str]:
+    """
+    检测两条线的交叉信号（金叉/死叉）
+
+    Args:
+        series1: 快速线序列
+        series2: 慢速线序列
+
+    Returns:
+        str: "gold_cross" (金叉), "death_cross" (死叉), 或 None (无交叉)
+    """
+    if len(series1) < 2 or len(series2) < 2:
+        return None
+
+    # 获取最近两个点的关系
+    prev_diff = series1.iloc[-2] - series2.iloc[-2]
+    curr_diff = series1.iloc[-1] - series2.iloc[-1]
+
+    # 金叉：快速线从下方穿越到上方
+    if prev_diff <= 0 and curr_diff > 0:
+        return "gold_cross"
+    # 死叉：快速线从上方穿越到下方
+    elif prev_diff >= 0 and curr_diff < 0:
+        return "death_cross"
+    return None
+
+
 class IndicatorRegistry:
     """
     指标注册表

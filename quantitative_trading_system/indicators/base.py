@@ -43,6 +43,52 @@ class Indicator(ABC):
         """
         pass
 
+    def evaluate(self, value: float, operator: str, threshold: float) -> bool:
+        """
+        判断条件是否满足（支持多种运算符）
+
+        Args:
+            value: 当前指标值
+            operator: 运算符 (>, <, >=, <=, ==, cross_up, cross_down)
+            threshold: 阈值
+
+        Returns:
+            bool: 条件是否满足
+        """
+        if operator == '>':
+            return value > threshold
+        elif operator == '<':
+            return value < threshold
+        elif operator == '>=':
+            return value >= threshold
+        elif operator == '<=':
+            return value <= threshold
+        elif operator == '==':
+            return value == threshold
+        elif operator == 'cross_up':
+            # cross_up 需要额外参数，这里简化为 value > threshold
+            return value > threshold
+        elif operator == 'cross_down':
+            # cross_down 需要额外参数，这里简化为 value < threshold
+            return value < threshold
+        else:
+            raise ValueError(f"Unsupported operator: {operator}")
+
+    def get_cross_signal(self, data: pd.DataFrame, line1: str, line2: str) -> Optional[str]:
+        """
+        检测金叉和死叉信号
+
+        Args:
+            data: 包含 OHLCV 数据的 DataFrame
+            line1: 快速线名称 (如 'macd')
+            line2: 慢速线名称 (如 'signal')
+
+        Returns:
+            str: "gold_cross", "death_cross", 或 None
+        """
+        # 子类可以重写此方法实现具体逻辑
+        return None
+
     def validate_data(self, data: pd.DataFrame) -> bool:
         """
         验证数据格式
