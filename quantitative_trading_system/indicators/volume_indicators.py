@@ -30,18 +30,8 @@ def OBV(data, column='close'):
     """
     close = data[column]
     volume = data['volume']
-
-    obv = pd.Series(index=data.index, dtype=float)
-    obv.iloc[0] = volume.iloc[0]
-
-    for i in range(1, len(data)):
-        if close.iloc[i] > close.iloc[i-1]:
-            obv.iloc[i] = obv.iloc[i-1] + volume.iloc[i]
-        elif close.iloc[i] < close.iloc[i-1]:
-            obv.iloc[i] = obv.iloc[i-1] - volume.iloc[i]
-        else:
-            obv.iloc[i] = obv.iloc[i-1]
-
+    direction = np.sign(close.diff()).fillna(1)
+    obv = (direction * volume).cumsum()
     return pd.Series(obv, name='obv')
 
 
@@ -122,23 +112,15 @@ def MFI(data, period=14):
     tp = (high + low + close) / 3
     raw_mf = tp * volume
 
-    # 计算正向和负向资金流
-    positive_mf = pd.Series(index=data.index, dtype=float)
-    negative_mf = pd.Series(index=data.index, dtype=float)
-
-    for i in range(1, len(data)):
-        if tp.iloc[i] > tp.iloc[i-1]:
-            positive_mf.iloc[i] = raw_mf.iloc[i]
-            negative_mf.iloc[i] = 0
-        elif tp.iloc[i] < tp.iloc[i-1]:
-            positive_mf.iloc[i] = 0
-            negative_mf.iloc[i] = raw_mf.iloc[i]
-        else:
-            positive_mf.iloc[i] = 0
-            negative_mf.iloc[i] = 0
+    # 向量化计算正向和负向资金流
+    tp_diff = tp.diff()
+    positive_mf = tp_diff.where(tp_diff > 0, 0) * volume
+    negative_mf = (-tp_diff.where(tp_diff < 0, 0)) * volume
 
     # 计算资金流比率和MFI
-    mf_ratio = positive_mf.rolling(window=period).sum() / negative_mf.rolling(window=period).sum()
+    positive_mf_sum = positive_mf.rolling(window=period).sum()
+    negative_mf_sum = negative_mf.rolling(window=period).sum()
+    mf_ratio = positive_mf_sum / negative_mf_sum
     mfi = 100 - (100 / (1 + mf_ratio))
 
     return pd.Series(mfi, name='mfi')
