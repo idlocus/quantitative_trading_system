@@ -34,42 +34,4 @@ class Strategy(ABC):
         pass
 
 
-class MomentumStrategy(Strategy):
-    """
-    动量策略
-
-    基于技术指标动量信号进行选股
-    """
-
-    def __init__(self, config_name: str, data_source):
-        """
-        初始化动量策略
-
-        Args:
-            config_name: 策略配置名称
-            data_source: 数据源，需提供 get_kline(symbol) 方法返回 OHLCV DataFrame
-        """
-        # 使用默认的 yaml_path，从项目配置目录读取
-        import os
-        yaml_path = os.path.join(
-            os.path.dirname(__file__),
-            'config',
-            'strategies.yaml'
-        )
-        self.config = load_strategy_from_yaml(config_name, yaml_path)
-        self.data_source = data_source
-        self.scanner = StockScanner(data_source)
-
-    def select(self, date, data) -> List[ScoredStock]:
-        """
-        执行选股
-
-        Args:
-            date: 选股日期
-            data: 数据访问对象
-
-        Returns:
-            按评分降序排列的股票列表
-        """
-        symbols = data.get_tradable_symbols(date)
-        return self.scanner.scan(symbols, self.config)
+from .momentum import MomentumStrategy
