@@ -144,6 +144,7 @@ class BacktestEngine:
         Returns:
             BacktestResult 回测结果
         """
+        self._data = data
         for trading_date in data.trading_dates:
             # 1. 选股
             signals = strategy.select(trading_date, data)
@@ -155,6 +156,8 @@ class BacktestEngine:
 
             # 3. 执行买入
             for pos in new_positions:
+                if pos.symbol not in self.positions and len(self.positions) >= self.config.max_positions:
+                    continue
                 if pos.symbol not in self.positions:
                     self._execute_buy(pos, trading_date)
 
@@ -250,9 +253,8 @@ class BacktestEngine:
         """生成回测结果"""
         initial_capital = self.config.initial_capital
         final_capital = self.cash + sum(
-            data.get_close(symbol, date) * pos.quantity
+            self._data.get_close(symbol, date) * pos.quantity
             for symbol, pos in self.positions.items()
-            for data in [self._get_data_source()]
         )
 
         # 计算总收益率
@@ -385,7 +387,4 @@ class BacktestEngine:
 
         return np.mean(holding_days_list) if holding_days_list else 0.0
 
-    def _get_data_source(self):
-        """获取数据源 (用于 final_capital 计算)"""
-        # 尝试从 positions 中获取数据源的引用
-        return getattr(self.risk_manager, 'data_source', None)
+    
