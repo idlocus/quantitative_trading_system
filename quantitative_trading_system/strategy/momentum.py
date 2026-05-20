@@ -1,37 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-策略框架
-提供选股策略基类和实现
+动量策略实现
+基于技术指标动量信号的选股策略
 """
 
-from abc import ABC, abstractmethod
 from typing import List
+import os
 
 from selection.config import SelectionConfig, ScoredStock
 from selection.scanner import StockScanner, load_strategy_from_yaml
-
-
-class Strategy(ABC):
-    """
-    策略抽象基类
-
-    定义选股策略的基本接口，用于每日选股
-    """
-
-    @abstractmethod
-    def select(self, date, data) -> List[ScoredStock]:
-        """
-        每日选股
-
-        Args:
-            date: 选股日期
-            data: 数据访问对象，需提供 get_tradable_symbols(date) 方法
-
-        Returns:
-            按评分降序排列的股票列表
-        """
-        pass
+from . import Strategy
 
 
 class MomentumStrategy(Strategy):
@@ -49,8 +28,6 @@ class MomentumStrategy(Strategy):
             config_name: 策略配置名称
             data_source: 数据源，需提供 get_kline(symbol) 方法返回 OHLCV DataFrame
         """
-        # 使用默认的 yaml_path，从项目配置目录读取
-        import os
         yaml_path = os.path.join(
             os.path.dirname(__file__),
             'config',
@@ -66,7 +43,7 @@ class MomentumStrategy(Strategy):
 
         Args:
             date: 选股日期
-            data: 数据访问对象
+            data: 数据访问对象，需提供 get_tradable_symbols(date) 方法
 
         Returns:
             按评分降序排列的股票列表
