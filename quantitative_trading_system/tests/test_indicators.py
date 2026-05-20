@@ -141,8 +141,13 @@ def test_macd_gold_cross_detection():
     macd = MACD(data)
     signal = detect_cross_signal(macd['macd'], macd['signal'])
 
-    # 在上涨趋势中，MACD 应该倾向于产生金叉
-    # 注意：不一定每次都有金叉，所以只检查返回值类型
+    # 信号应该是 None, 'gold_cross', 或 'death_cross' 之一
+    assert signal in [None, 'gold_cross', 'death_cross'], \
+        f"MACD 交叉信号应为 [None, 'gold_cross', 'death_cross']，得到: {signal}"
+
+    # 在强上涨趋势中，应该更可能产生金叉而非死叉
+    # 如果没有交叉，至少验证返回值有效
+    assert isinstance(signal, str) or signal is None
 
 
 # =============================================================================
@@ -174,8 +179,8 @@ def test_bollinger_bands_properties():
     assert (valid_bb['middle'] >= valid_bb['lower']).all(), "中轨应 >= 下轨"
 
     # 带宽应该是正值
-    if 'bandwidth' in bb.columns:
-        assert (bb['bandwidth'].dropna() > 0).all(), "带宽应为正值"
+    assert 'bandwidth' in bb.columns, "BollingerBands 应包含 'bandwidth' 列"
+    assert (bb['bandwidth'].dropna() > 0).all(), "带宽应为正值"
 
 
 # =============================================================================
@@ -243,14 +248,29 @@ def test_obv_monotonic_increasing_when_price_rises():
 
     obv = OBV(data)
 
-    # 在持续上涨期间，OBV 应该是累积增加的
-    # 但由于 OBV 取决于方向变化，可能不完全单调
-    # 我们检查 OBV 最后值应该大于开始值
     valid_obv = obv.dropna()
     assert len(valid_obv) > 0
-    # OBV 应该总体趋势向上
-    assert valid_obv.iloc[-1] >= valid_obv.iloc[0], \
-        "在持续上涨中，OBV 应该增加（至少不减少）"
+
+    # 计算 OBV 变化
+    obv_diff = valid_obv.diff().dropna()
+
+    # 计算价格上涨的天数比例（收盘价相比前一天上涨）
+    price_rises = (data['close'].diff().dropna() > 0)
+    price_up_count = price_rises.sum()
+    total_price_changes = len(price_rises)
+
+    # 在持续上涨趋势中，大部分天数价格应该上涨
+    assert price_up_count / total_price_changes > 0.6, \
+        f"测试数据应呈持续上涨趋势，但只有 {price_up_count}/{total_price_changes} 天上涨"
+
+    # OBV 在价格上涨时应该增加，下跌时应该减少
+    # 计算 OBV 变化与价格变化方向一致的比例
+    price_changes = data['close'].diff().dropna()
+    aligned_changes = ((obv_diff > 0) & (price_changes > 0)) | ((obv_diff < 0) & (price_changes < 0))
+    alignment_ratio = aligned_changes.sum() / len(obv_diff)
+
+    assert alignment_ratio > 0.6, \
+        f"OBV 变化方向应与价格变化方向一致，期望 > 60%，得到: {alignment_ratio:.2%}"
 
 
 # =============================================================================
