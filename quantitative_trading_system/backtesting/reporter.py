@@ -205,6 +205,38 @@ class BacktestReporter:
                 </tbody>
             </table>
         </div>
+
+        <h2>触发条件</h2>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>序号</th>
+                        <th>日期</th>
+                        <th>股票</th>
+                        <th>操作</th>
+                        <th>触发条件</th>
+                    </tr>
+                </thead>
+                <tbody>
+"""
+        for trade in result.trades:
+            action_class = 'buy' if trade.action == 'BUY' else 'sell'
+            conditions_str = self._format_conditions(trade.conditions)
+            html += f"""
+                    <tr>
+                        <td>{trade.id}</td>
+                        <td>{trade.date}</td>
+                        <td>{trade.symbol}</td>
+                        <td class="{action_class}">{trade.action}</td>
+                        <td>{conditions_str}</td>
+                    </tr>
+"""
+
+        html += """
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <script>
