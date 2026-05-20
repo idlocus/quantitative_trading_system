@@ -79,7 +79,7 @@ class StockScanner:
             if isinstance(values, pd.DataFrame):
                 # 取最后一列作为主值
                 current = values.iloc[-1, -1]
-                prev = values.iloc[-2, -2] if len(values) > 1 else current
+                prev = values.iloc[-2] if len(values) > 1 else current
             else:
                 current = values.iloc[-1]
                 prev = values.iloc[-2] if len(values) > 1 else current
@@ -87,7 +87,7 @@ class StockScanner:
             indicators[rule.name] = current
 
             # 评估条件
-            met = self._check_condition(current, prev, rule.operator, rule.threshold)
+            met = self._check_condition(current, prev, rule.operator, rule.threshold, data)
             if met:
                 scores.append(rule.weight * 100)
                 conditions.append({
@@ -106,7 +106,7 @@ class StockScanner:
         total_score = min(100, int(sum(scores) / len(config.indicators)))
         return total_score, conditions, indicators
 
-    def _check_condition(self, current: float, prev: float, operator: str, threshold) -> bool:
+    def _check_condition(self, current: float, prev: float, operator: str, threshold, data: pd.DataFrame = None) -> bool:
         """
         检查条件是否满足
 
@@ -115,6 +115,7 @@ class StockScanner:
             prev: 前一个值
             operator: 操作符
             threshold: 阈值
+            data: 原始K线数据（用于break操作符计算布林带）
 
         Returns:
             条件是否满足
@@ -128,15 +129,21 @@ class StockScanner:
         elif operator == "<=":
             return current <= threshold
         elif operator == "cross_up":
-            return prev < threshold <= current
+            return prev < threshold < current
         elif operator == "cross_down":
-            return prev > threshold >= current
+            return prev > threshold > current
         elif operator == "break_upper":
             # 价格突破布林带上轨
-            return current > threshold
+            if data is None:
+                return False
+            upper = data['close'].rolling(20).mean() + 2 * data['close'].rolling(20).std()
+            return current > upper.iloc[-1]
         elif operator == "break_lower":
             # 价格突破布林带下轨
-            return current < threshold
+            if data is None:
+                return False
+            lower = data['close'].rolling(20).mean() - 2 * data['close'].rolling(20).std()
+            return current < lower.iloc[-1]
         return False
 
 
