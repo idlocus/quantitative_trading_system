@@ -43,50 +43,56 @@ class Indicator(ABC):
         """
         pass
 
-    def evaluate(self, value: float, operator: str, threshold: float) -> bool:
+    def evaluate(self, data: pd.Series, operator: str, threshold: float) -> bool:
         """
         判断条件是否满足（支持多种运算符）
 
         Args:
-            value: 当前指标值
+            data: 指标值序列（pd.Series）
             operator: 运算符 (>, <, >=, <=, ==, cross_up, cross_down)
             threshold: 阈值
 
         Returns:
             bool: 条件是否满足
         """
+        if len(data) < 2:
+            return False
+
+        current = data.iloc[-1]
+        previous = data.iloc[-2]
+
         if operator == '>':
-            return value > threshold
+            return current > threshold
         elif operator == '<':
-            return value < threshold
+            return current < threshold
         elif operator == '>=':
-            return value >= threshold
+            return current >= threshold
         elif operator == '<=':
-            return value <= threshold
+            return current <= threshold
         elif operator == '==':
-            return value == threshold
+            return current == threshold
         elif operator == 'cross_up':
-            # cross_up 需要额外参数，这里简化为 value > threshold
-            return value > threshold
+            # 金叉：前一个值低于阈值，当前值大于等于阈值
+            return previous < threshold and current >= threshold
         elif operator == 'cross_down':
-            # cross_down 需要额外参数，这里简化为 value < threshold
-            return value < threshold
+            # 死叉：前一个值高于阈值，当前值小于等于阈值
+            return previous > threshold and current <= threshold
         else:
             raise ValueError(f"Unsupported operator: {operator}")
 
-    def get_cross_signal(self, data: pd.DataFrame, line1: str, line2: str) -> Optional[str]:
+    def get_cross_signal(self, data: pd.DataFrame) -> Optional[str]:
         """
-        检测金叉和死叉信号
+        检测金叉和死叉信号（通用实现，子类可重写）
 
         Args:
-            data: 包含 OHLCV 数据的 DataFrame
-            line1: 快速线名称 (如 'macd')
-            line2: 慢速线名称 (如 'signal')
+            data: 包含 OHLCV 数据的 DataFrame，指标值应作为列存在
 
         Returns:
             str: "gold_cross", "death_cross", 或 None
         """
         # 子类可以重写此方法实现具体逻辑
+        # 默认实现：检测最后两行中 any column vs any other column 的交叉
+        # 如果子类需要指定具体列，应重写此方法
         return None
 
     def validate_data(self, data: pd.DataFrame) -> bool:
