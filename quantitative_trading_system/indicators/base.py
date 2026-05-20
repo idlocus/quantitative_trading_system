@@ -43,6 +43,67 @@ class Indicator(ABC):
         """
         pass
 
+    @abstractmethod
+    def evaluate(self, data: pd.Series, operator: str, threshold) -> bool:
+        """
+        判断条件是否满足
+
+        Args:
+            data: 指标值序列
+            operator: 操作符 (>, <, >=, <=, ==, cross_up, cross_down)
+            threshold: 比较阈值
+
+        Returns:
+            bool: 条件是否满足
+        """
+        pass
+
+    def get_cross_signal(self, data: pd.DataFrame) -> Optional[str]:
+        """
+        检测金叉/死叉，可被子类重写
+
+        Args:
+            data: 包含短期和长期指标的 DataFrame，需包含 short_col 和 long_col 列
+
+        Returns:
+            str: "gold_cross", "death_cross", 或 None
+        """
+        # 默认实现：检测两列的金叉/死叉
+        # 子类可以重写此方法以实现特定的交叉检测逻辑
+        if not isinstance(data, pd.DataFrame):
+            return None
+
+        # 尝试查找常见的短期/长期列组合
+        short_col = None
+        long_col = None
+
+        # 常见列名模式
+        for short_name, long_name in [('short', 'long'), ('fast', 'slow'),
+                                       ('ma_short', 'ma_long'), ('ema_short', 'ema_long')]:
+            if short_name in data.columns and long_name in data.columns:
+                short_col = short_name
+                long_col = long_name
+                break
+
+        if short_col is None or long_col not in data.columns:
+            return None
+
+        if len(data) < 2:
+            return None
+
+        # 检测交叉
+        short_values = data[short_col].values
+        long_values = data[long_col].values
+
+        # 前一根K线短期 < 长期，当前短期 >= 长期 -> 金叉
+        if short_values[-2] < long_values[-2] and short_values[-1] >= long_values[-1]:
+            return "gold_cross"
+        # 前一根K线短期 > 长期，当前短期 <= 长期 -> 死叉
+        elif short_values[-2] > long_values[-2] and short_values[-1] <= long_values[-1]:
+            return "death_cross"
+
+        return None
+
     def validate_data(self, data: pd.DataFrame) -> bool:
         """
         验证数据格式
