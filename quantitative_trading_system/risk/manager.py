@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import List, Dict, Optional
 
-from selection.config import ScoredStock
+from selection.config import ScoredStock, SelectionConfig
 
 
 @dataclass
@@ -19,7 +19,7 @@ class Position:
     quantity: int
     entry_date: date
     signal_score: int
-    conditions: Dict  # 买入时的指标状态
+    conditions: List[Dict]  # 买入时的指标状态
 
 
 class RiskManager:
@@ -43,20 +43,29 @@ class RiskManager:
         self.max_position_size = max_position_size
         self.data_source = data_source
 
-    def allocate(self, signals: List[ScoredStock], capital: float) -> List[Position]:
+    def allocate(self, signals: List[ScoredStock], capital: float,
+                 config: Optional[SelectionConfig] = None) -> List[Position]:
         """
         根据选股信号分配仓位
 
         Args:
             signals: 排序后的选股信号列表
             capital: 总资金
+            config: 选股配置，包含 max_positions 等参数
 
         Returns:
             Position 列表
         """
+        max_positions = config.max_positions if config else 5
         positions = []
-        for signal in signals[:5]:  # 最多5个持仓
+        total_weight = 0.0
+        for signal in signals:
+            if len(positions) >= max_positions:
+                break
             weight = self._score_to_weight(signal.score)
+            if total_weight + weight > 0.8:
+                break
+            total_weight += weight
             amount = capital * weight
             price = self._get_price(signal.symbol)
             quantity = int(amount / price)
@@ -67,7 +76,7 @@ class RiskManager:
                     quantity=quantity,
                     entry_date=date.today(),
                     signal_score=signal.score,
-                    conditions=dict(signal.conditions) if signal.conditions else {}
+                    conditions=signal.conditions
                 ))
         return positions
 
