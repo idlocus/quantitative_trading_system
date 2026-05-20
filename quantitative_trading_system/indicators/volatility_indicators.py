@@ -8,7 +8,10 @@
 import pandas as pd
 import numpy as np
 
+from .registry import IndicatorRegistry
 
+
+@IndicatorRegistry.register('bb', category='volatility')
 def BollingerBands(data, period=20, std_dev=2, column='close'):
     """
     Bollinger Bands (布林带)
@@ -42,6 +45,7 @@ def BollingerBands(data, period=20, std_dev=2, column='close'):
     })
 
 
+@IndicatorRegistry.register('atr', category='volatility')
 def ATR(data, period=14):
     """
     ATR (Average True Range) - 平均真实波幅

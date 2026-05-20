@@ -8,7 +8,10 @@
 import pandas as pd
 import numpy as np
 
+from .registry import IndicatorRegistry
 
+
+@IndicatorRegistry.register('obv', category='volume')
 def OBV(data, column='close'):
     """
     OBV (On-Balance Volume) - 能量潮
@@ -95,6 +98,7 @@ def CMF(data, period=20):
     return pd.Series(cmf, name='cmf')
 
 
+@IndicatorRegistry.register('mfi', category='volume')
 def MFI(data, period=14):
     """
     MFI (Money Flow Index) - 资金流量指标
@@ -140,6 +144,7 @@ def MFI(data, period=14):
     return pd.Series(mfi, name='mfi')
 
 
+@IndicatorRegistry.register('vwap', category='volume')
 def VWAP(data):
     """
     VWAP (Volume Weighted Average Price) - 成交量加权平均价

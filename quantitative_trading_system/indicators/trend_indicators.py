@@ -8,7 +8,10 @@
 import pandas as pd
 import numpy as np
 
+from .registry import IndicatorRegistry
 
+
+@IndicatorRegistry.register('sma', category='trend')
 def SMA(data, period=20, column='close'):
     """
     简单移动平均线 (Simple Moving Average)
@@ -23,6 +26,7 @@ def SMA(data, period=20, column='close'):
     return data[column].rolling(window=period).mean()
 
 
+@IndicatorRegistry.register('ema', category='trend')
 def EMA(data, period=20, column='close'):
     """
     指数移动平均线 (Exponential Moving Average)
@@ -38,6 +42,7 @@ def EMA(data, period=20, column='close'):
     return data[column].ewm(span=period, adjust=False).mean()
 
 
+@IndicatorRegistry.register('macd', category='trend')
 def MACD(data, fast_period=12, slow_period=26, signal_period=9, column='close'):
     """
     MACD (Moving Average Convergence Divergence)
@@ -67,6 +72,7 @@ def MACD(data, fast_period=12, slow_period=26, signal_period=9, column='close'):
     })
 
 
+@IndicatorRegistry.register('dmi', category='trend')
 def DMI_ADX(data, period=14):
     """
     DMI (Directional Movement Index) + ADX (Average Directional Index)
