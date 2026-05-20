@@ -13,8 +13,7 @@ from .base import Indicator, CompositeIndicator, IndicatorResult
 
 # 导入所有指标（触发注册）
 from .trend_indicators import (
-    SMA, EMA, MACD, DMI_ADX, IchimokuCloud,
-    GoldenCrossDeathCross, TripleMovingAverageCross
+    SMA, EMA, MACD, DMI_ADX
 )
 
 from .momentum_indicators import (
@@ -22,31 +21,16 @@ from .momentum_indicators import (
 )
 
 from .volatility_indicators import (
-    BollingerBands, ATR, StandardDeviation,
-    KeltnerChannels, DonchianChannels
+    BollingerBands, ATR, StandardDeviation
 )
 
 from .volume_indicators import (
     OBV, AccumulationDistribution, CMF, MFI, VWAP
 )
 
-from .breadth_indicators import (
-    AdvanceDeclineLine, McClellanOscillator,
-    McClellanSummationIndex, ArmsIndex, HighLowIndex
-)
-
 from .pattern_indicators import (
-    FibonacciRetracement, FibonacciExtension,
-    PivotPoints, PatternRecognizer, SupportResistanceLevels,
+    SupportResistanceLevels,
     detect_candlestick_patterns
-)
-
-# 市场状态分析
-from .market_regime import (
-    MarketRegime, MarketRegimeAnalyzer, MarketRegimeResult,
-    MarketBreadthAnalyzer, MarketBreadthResult,
-    MarketSentimentAnalyzer, TrendDirection,
-    get_strategy_by_regime, generate_market_report
 )
 
 # 导出列表
@@ -58,32 +42,16 @@ __all__ = [
     'CompositeIndicator',
     'IndicatorResult',
     # Trend
-    'SMA', 'EMA', 'MACD', 'DMI_ADX', 'IchimokuCloud',
-    'GoldenCrossDeathCross', 'TripleMovingAverageCross',
+    'SMA', 'EMA', 'MACD', 'DMI_ADX',
     # Momentum
     'RSI', 'Stochastic', 'ROC', 'CCI', 'RPS', 'detect_divergence',
     # Volatility
     'BollingerBands', 'ATR', 'StandardDeviation',
-    'KeltnerChannels', 'DonchianChannels',
     # Volume
     'OBV', 'AccumulationDistribution', 'CMF', 'MFI', 'VWAP',
-    # Breadth
-    'AdvanceDeclineLine', 'McClellanOscillator',
-    'McClellanSummationIndex', 'ArmsIndex', 'HighLowIndex',
     # Patterns
-    'FibonacciRetracement', 'FibonacciExtension',
-    'PivotPoints', 'PatternRecognizer', 'SupportResistanceLevels',
+    'SupportResistanceLevels',
     'detect_candlestick_patterns',
-    # Market Regime
-    'MarketRegime',
-    'MarketRegimeAnalyzer',
-    'MarketRegimeResult',
-    'MarketBreadthAnalyzer',
-    'MarketBreadthResult',
-    'MarketSentimentAnalyzer',
-    'TrendDirection',
-    'get_strategy_by_regime',
-    'generate_market_report'
 ]
 
 

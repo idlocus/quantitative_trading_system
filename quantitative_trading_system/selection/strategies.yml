@@ -1,0 +1,38 @@
+# 选股策略配置
+# 用于 StockScanner 的策略定义
+
+short_term_momentum:
+  name: "短期动量反转"
+  description: "RSI超卖 + MACD金叉 + 短期均线多头"
+  indicators:
+    - name: "rsi"
+      operator: "<"
+      threshold: 40
+      weight: 1.0
+    - name: "macd"
+      operator: "cross_up"
+      threshold: 0
+      weight: 1.0
+    - name: "ema"
+      operator: ">"
+      threshold: 0
+      weight: 1.0
+  logic: "AND"
+  min_score: 60
+  max_positions: 10
+
+breakout:
+  name: "突破策略"
+  description: "布林带上轨突破 + 资金流量放大"
+  indicators:
+    - name: "bb"
+      operator: "break_upper"
+      threshold: 0
+      weight: 1.0
+    - name: "mfi"
+      operator: ">"
+      threshold: 50
+      weight: 1.0
+  logic: "AND"
+  min_score: 60
+  max_positions: 5
