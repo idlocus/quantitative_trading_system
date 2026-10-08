@@ -29,7 +29,6 @@ td{padding:7px 10px;text-align:right;border-bottom:1px solid #1d2637;color:#cbd5
 </style>
 </head>
 <body>
-<div id="diagLine" style="font-size:12px;color:#64748b;padding:6px 10px;background:#111827;border-radius:6px;margin-bottom:10px">环境检测中…</div>
 <div class="container">
   <h1>PMS · 策略回测 <span class="sub">数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
   <div class="nav">
@@ -111,10 +110,7 @@ td{padding:7px 10px;text-align:right;border-bottom:1px solid #1d2637;color:#cbd5
 <script>
 const eras = {{ eras | tojson }};
 const fmtP = v => (v>=0?'+':'') + (v*100).toFixed(1) + '%';
-document.getElementById('diagLine').innerHTML =
-  'ECharts: <b>' + (typeof echarts !== 'undefined' ? '✓已加载' : '✗未加载') + '</b>'
-  + ' | 数据段: <b>' + eras.length + '</b>'
-  + (eras[0] ? ' | 首段净值点: <b>' + eras[0].strategy.equity.dates.length + '</b>' : '');
+
 eras.forEach(e => {
   const eq = echarts.init(document.getElementById('eq_' + e.key), null, {renderer: 'svg'});
   const s = e.strategy;
@@ -134,7 +130,7 @@ eras.forEach(e => {
     yAxis:{type:'value',scale:true,axisLabel:{color:'#64748b'},splitLine:{lineStyle:{color:'#1d2637'}}},
     series: series});
   requestAnimationFrame(()=>requestAnimationFrame(()=>{ eq.resize(); yr.resize();
-    document.getElementById('diagLine').innerHTML += ' | 图宽:' + eq.getWidth() + 'px 高:' + eq.getHeight() + 'px';
+    
   }));
   const yr = echarts.init(document.getElementById('yr_' + e.key), null, {renderer: 'svg'});
   const yd = s.yearly;

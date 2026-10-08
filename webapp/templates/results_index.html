@@ -30,7 +30,11 @@ details summary { cursor: pointer; font-size: 14px; color: #cbd5e1; }
 <body>
 <div class="container">
   <div class="nav"><a href="/pms">组合管理</a><a href="/strategy">策略回测</a><b>每日交易报告</b><a href="/research">研究仪表盘</a></div>
-  <h1>每日交易报告 <span class="sub">每个交易日一份：盘前展望 / 决策依据 / 成交 / 持仓归因 / 收盘点评</span></h1>
+  <h1>PMS · 每日交易报告 <span class="sub">数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
+  <div class="nav"><a href="/pms">组合管理</a><a href="/strategy">策略回测</a><b>每日交易报告</b><a href="/research">研究仪表盘</a>
+    <span class="refresh">刷新于 <script>document.write(new Date().toLocaleTimeString())</script></span>
+  </div>
+  <!-- old_h1 --> <span class="sub">每个交易日一份：盘前展望 / 决策依据 / 成交 / 持仓归因 / 收盘点评</span></h1>
 
   <div class="card">
     <h3>📅 交易日历（{{ journals|length }} 个交易日）</h3>
