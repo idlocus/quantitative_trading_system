@@ -79,8 +79,8 @@ tr:hover td{background:#1a2333}
 
   <!-- 归因 -->
   <div class="panel" id="p-attr">
-    <div class="card"><h3>当日个股贡献（红=亏损 绿=盈利）</h3><div id="contribChart"></div></div>
-    <div class="card"><h3>累计持仓盈亏（按股票）</h3><div id="cumChart"></div></div>
+    <div class="card"><h3>当日个股贡献（红=盈利 绿=亏损，双击条目可跳个股）</h3><div id="contribChart"></div></div>
+    <div class="card"><h3>累计持仓盈亏（红=盈利 绿=亏损）</h3><div id="cumChart"></div></div>
   </div>
 
 <!-- 个股钻取弹窗 -->
@@ -134,9 +134,11 @@ function renderKpi(){
   document.getElementById('kpiTiles').innerHTML=tiles.map(t=>
     `<div class="tile"><div class="k">${t[0]}</div><div class="v ${t[2]||''}">${t[1]}</div></div>`).join('');
 }
+let NAV_CHART=null;
 function renderNav(){
   const h=DATA.nav_history;
-  const c=echarts.init(document.getElementById('navChart'));
+  if(!NAV_CHART){NAV_CHART=echarts.init(document.getElementById('navChart'));window.addEventListener('resize',()=>NAV_CHART&&NAV_CHART.resize());}
+  const c=NAV_CHART;
   c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},
     grid:{left:80,right:20,top:15,bottom:35},
     xAxis:{type:'category',data:h.map(x=>x.date),axisLabel:{color:'#64748b'}},
@@ -170,12 +172,11 @@ function renderTrades(){
   document.getElementById('tradeTable').innerHTML=`<tr><th class="l">日期</th><th class="l">代码</th><th class="l">方向</th>
     <th>价格</th><th>数量</th><th>佣金</th><th>税费</th><th class="l">交易逻辑</th></tr>`+
     t.map(x=>`<tr><td class="l">${(x.time||x.date).replace('T',' ')}</td><td class="l"><b class="sym" onclick="showSymbol('${x.symbol}')">${x.symbol}</b></td>
-    <td class="l"><span class="badge" style="color:${x.side==='BUY'?'#34d399':'#f87171'}">${x.side==='BUY'?'买入':'卖出'}</span></td>
-    <td>${x.price.toFixed(2)}</td><td>${fmt(x.quantity)}</td><td>${x.commission.toFixed(2)}</td><td>${x.taxes.toFixed(2)}</td><td class="l" style="color:#94a3b8">${x.note||'建仓买入'}</td></tr>`).join('');
+    <td class="l"><span class="badge" style="color:${x.side==='BUY'?'#f87171':'#34d399'}">${x.side==='BUY'?'买入':'卖出'}</span></td>
+    <td>${x.price.toFixed(2)}</td><td>${fmt(x.quantity)}</td><td>${x.commission.toFixed(2)}</td><td>${x.taxes.toFixed(2)}</td><td class="l" style="color:#94a3b8">${x.note||'首期建仓 · 详见于个股详情'}</td></tr>`).join('');
 }
 function renderAttr(){
-  const ps=[...DATA.positions];
-  const day=ps.sort((a,b)=>a.day_contrib-b.day_contrib);
+  const day=[...DATA.positions].sort((a,b)=>a.day_contrib-b.day_contrib);
   const top=day.slice(-10), bot=day.slice(0,10);
   const cats=[...new Set([...bot.map(x=>x.symbol),...top.map(x=>x.symbol)])];
   const vals=cats.map(s=>({...day.find(x=>x.symbol===s)}).day_contrib||0);
@@ -183,15 +184,16 @@ function renderAttr(){
   c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},
     grid:{left:90,right:30,top:10,bottom:30},
     xAxis:{type:'value',axisLabel:{color:'#64748b'},splitLine:{lineStyle:{color:'#1d2637'}}},
-    yAxis:{type:'category',data:cats,axisLabel:{color:'#94a3b8'}},
-    series:[{type:'bar',data:vals.map(v=>({value:v,itemStyle:{color:v>=0?'#34d399':'#f87171'}})),barWidth:'60%'}]});
+    yAxis:{type:'category',data:cats,axisLabel:{color:'#94a3b8',formatter:v=>v}},
+    series:[{type:'bar',data:vals.map(v=>({value:v,itemStyle:{color:v>=0?'#ef4444':'#22c55e'}})),barWidth:'60%'}]});
+  c.off('click'); c.on('click',e=>{const s=cats[e.dataIndex];if(s)showSymbol(s);});
   const cum=[...DATA.positions].sort((a,b)=>a.pnl-b.pnl);
   const cc=echarts.init(document.getElementById('cumChart'));
   cc.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},
     grid:{left:90,right:30,top:10,bottom:30},
     xAxis:{type:'value',axisLabel:{color:'#64748b'},splitLine:{lineStyle:{color:'#1d2637'}}},
     yAxis:{type:'category',data:cum.map(x=>x.symbol),axisLabel:{color:'#94a3b8'}},
-    series:[{type:'bar',data:cum.map(x=>({value:x.pnl,itemStyle:{color:x.pnl>=0?'#34d399':'#f87171'}})),barWidth:'60%'}]});
+    series:[{type:'bar',data:cum.map(x=>({value:x.pnl,itemStyle:{color:x.pnl>=0?'#ef4444':'#22c55e'}})),barWidth:'60%'}]});
   window.addEventListener('resize',()=>{c.resize();cc.resize();});
 }
 

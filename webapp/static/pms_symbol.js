@@ -1,5 +1,5 @@
 // 个股钻取：Wind风格日K（双击某天看分时）
-let SYM_DATA = null, SYM_CHART = null;
+let SYM_DATA = null, SYM_CHART = null, SYM_LOGIC = '';
 
 async function showSymbol(sym) {
   document.getElementById('symModal').style.display = 'block';
@@ -10,7 +10,9 @@ async function showSymbol(sym) {
   SYM_DATA = d;
   renderDailyK(sym);
   renderDailyK(sym);
-  document.getElementById('symTrades').innerHTML = '<tr><th class="l">时间</th><th class="l">方向</th>' +
+  SYM_LOGIC = '';
+  renderSymTrades(d.trades);
+  // 推荐逻辑卡片（异步加载，不阻塞K线）
     '<th>价格</th><th>数量</th><th>佣金</th><th>税费</th><th class="l">交易逻辑</th></tr>' +
     (d.trades.map(t => '<tr><td class="l">' + (t.time || t.date).replace('T', ' ') + '</td>' +
       '<td class="l"><span class="badge" style="color:' + (t.side === 'BUY' ? '#f87171' : '#34d399') + '">' +
@@ -30,6 +32,10 @@ async function showSymbol(sym) {
 function fillRationale(ra) {
   const raBox = document.getElementById('symRationale');
   if (ra && ra.points && ra.points.length) {
+    SYM_LOGIC = ra.points.map(p => p.replace(/\*\*/g, '')).join('；').slice(0, 160);
+    if (SYM_DATA && SYM_DATA.trades) renderSymTrades(SYM_DATA.trades);
+  }
+  if (ra && ra.points && ra.points.length) {
     let html = '<h4 style="color:#cbd5e1;font-size:13px;margin:0 0 8px">推荐逻辑（' + ra.day + ' 买入口径）'
       + (ra.score != null ? '　综合评分 <b style="color:#f59e0b">' + (ra.score * 100).toFixed(0) + '</b>/100' : '')
       + (ra.market_total ? '　全市场约 ' + ra.market_total + ' 只' : '') + '</h4><ul style="margin:0 0 8px 18px;padding:0">';
@@ -43,6 +49,18 @@ function fillRationale(ra) {
     raBox.innerHTML = html;
     raBox.style.display = 'block';
   } else { raBox.innerHTML = '<span style="color:#64748b;font-size:13px">暂无推荐逻辑数据</span>'; }
+}
+
+function renderSymTrades(trades) {
+  document.getElementById('symTrades').innerHTML = '<tr><th class="l">时间</th><th class="l">方向</th>' +
+    '<th>价格</th><th>数量</th><th>佣金</th><th>税费</th><th class="l">交易逻辑</th></tr>' +
+    (trades.map(t => '<tr><td class="l">' + (t.time || t.date).replace('T', ' ') + '</td>' +
+      '<td class="l"><span class="badge" style="color:' + (t.side === 'BUY' ? '#f87171' : '#34d399') + '">' +
+      (t.side === 'BUY' ? '买入' : '卖出') + '</span></td>' +
+      '<td>' + t.price.toFixed(2) + '</td><td>' + fmt(t.quantity) + '</td>' +
+      '<td>' + t.commission.toFixed(2) + '</td><td>' + t.taxes.toFixed(2) + '</td>' +
+      '<td class="l" style="color:#cbd5e1;max-width:360px">' + (t.note || SYM_LOGIC || '建仓买入（5因子Top30入选）') + '</td></tr>').join('') ||
+      '<tr><td class="empty">无交易记录</td></tr>');
 }
 
 function renderDailyK(sym) {
