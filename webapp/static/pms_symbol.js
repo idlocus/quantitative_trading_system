@@ -73,7 +73,7 @@ function renderDailyK(sym) {
 
 async function showIntraday(sym, day) {
   document.getElementById('symTitle').textContent = sym + ' · ' + day + ' 分时';
-  document.getElementById('kInfo').innerHTML = '<span style="color:#38bdf8;cursor:pointer" onclick="renderDailyK('' + sym + '')">← 返回日K</span>　<b style="color:#fff">' + sym + ' ' + day + '</b>';
+  document.getElementById('kInfo').innerHTML = '<span style="color:#38bdf8;cursor:pointer" onclick="renderDailyK(\'' + sym + '\')">← 返回日K</span>　<b style="color:#fff">' + sym + ' ' + day + '</b>';
   const r = await fetch('/pms/api/intraday/' + sym + '/' + day);
   const d = await r.json();
   if (d.error) { document.getElementById('kInfo').innerHTML += '　<span style="color:#f87171">' + d.error + '</span>'; return; }
