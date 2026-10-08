@@ -153,7 +153,38 @@ def api_symbol(symbol):
             'qty': ledger.get('positions', {}).get(symbol, 0),
             'cost': ledger.get('cost', {}).get(symbol, 0),
         },
+        'rationale': _rationale(symbol, df),
     })
+
+
+def _rationale(symbol, kline_df):
+    """推荐逻辑（买入口径：首笔买入日；无成交则最新日）"""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from data.layered import LayeredDataSource
+        from webapp.rationale import build_rationale
+        trades = []
+        try:
+            with open(LEDGER_PATH, encoding='utf-8') as f:
+                trades = json.load(f).get('trades', [])
+        except FileNotFoundError:
+            pass
+        day = None
+        for t in trades:
+            if t['symbol'] == symbol and t['side'] == 'BUY':
+                day = date.fromisoformat(t['date'][:10])
+                break
+        if day is None and kline_df is not None and not kline_df.empty:
+            d = kline_df['date'].iloc[-1]
+            day = d.date() if hasattr(d, 'date') else d
+        if day is None:
+            day = date.today()
+        ds = LayeredDataSource()
+        return build_rationale(ds, symbol, day)
+    except Exception as e:
+        logger.warning(f'rationale failed for {symbol}: {e}')
+        return None
 
 
 @bp.route('/api/data')

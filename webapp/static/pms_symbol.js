@@ -9,6 +9,23 @@ async function showSymbol(sym) {
   if (d.error) { document.getElementById('symTitle').textContent = sym + ' · ' + d.error; return; }
   SYM_DATA = d;
   renderDailyK(sym);
+  // 推荐逻辑卡片
+  const ra = d.rationale;
+  const raBox = document.getElementById('symRationale');
+  if (ra && ra.points && ra.points.length) {
+    let html = '<h4 style="color:#cbd5e1;font-size:13px;margin:0 0 8px">推荐逻辑（' + ra.day + ' 买入口径）'
+      + (ra.score != null ? '　综合评分 <b style="color:#f59e0b">' + (ra.score * 100).toFixed(0) + '</b>/100' : '')
+      + (ra.market_total ? '　全市场约 ' + ra.market_total + ' 只' : '') + '</h4><ul style="margin:0 0 8px 18px;padding:0">';
+    ra.points.forEach(p => {
+      html += '<li style="font-size:13px;color:#cbd5e1;line-height:1.8;margin:2px 0">'
+        + p.replace(/\*\*(.+?)\*\*/g, '<b style="color:#93c5fd">$1</b>') + '</li>';
+    });
+    html += '</ul><details style="margin-top:6px"><summary style="font-size:12px;color:#94a3b8;cursor:pointer">风险提示</summary><ul style="margin:6px 0 0 18px">';
+    (ra.risks || []).forEach(rk => { html += '<li style="font-size:12px;color:#f59e0b;line-height:1.7">' + rk + '</li>'; });
+    html += '</ul></details>';
+    raBox.innerHTML = html;
+    raBox.style.display = 'block';
+  } else { raBox.style.display = 'none'; }
   document.getElementById('symTrades').innerHTML = '<tr><th class="l">时间</th><th class="l">方向</th>' +
     '<th>价格</th><th>数量</th><th>佣金</th><th>税费</th><th class="l">交易逻辑</th></tr>' +
     (d.trades.map(t => '<tr><td class="l">' + (t.time || t.date).replace('T', ' ') + '</td>' +
