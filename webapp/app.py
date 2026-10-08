@@ -13,12 +13,14 @@ from .database import BacktestDB
 from .results_view import bp as results_bp
 from .dashboard import bp as dashboard_bp
 from .pms import bp as pms_bp
+from .strategy import bp as strategy_bp
 
 app = Flask(__name__)
 db = BacktestDB(os.path.join(os.path.dirname(__file__), 'backtest.db'))
 app.register_blueprint(results_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(pms_bp)
+app.register_blueprint(strategy_bp)
 
 
 def _prewarm_rationale():

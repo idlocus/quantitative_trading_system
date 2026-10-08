@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>策略回测 · 5因子选股</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#0f1420;color:#e5e7eb;padding:20px}
+.container{max-width:1280px;margin:0 auto}
+h1{font-size:20px;color:#fff}h1 .sub{font-size:12px;color:#64748b;font-weight:400}
+.nav{margin:10px 0 16px;font-size:13px;display:flex;gap:18px;align-items:center}
+.nav a{color:#60a5fa;text-decoration:none}.nav a:hover{text-decoration:underline}
+.card{background:#161d2e;border:1px solid #263143;border-radius:10px;padding:16px;margin-bottom:16px}
+.card h3{font-size:14px;color:#cbd5e1;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{color:#94a3b8;text-align:right;padding:8px 10px;border-bottom:1px solid #263143}
+th:first-child,td:first-child{text-align:left}
+td{padding:7px 10px;text-align:right;border-bottom:1px solid #1d2637;color:#cbd5e1}
+.pos{color:#f87171}.neg{color:#34d399}
+.chart{width:100%;height:300px}
+.ychart{width:100%;height:220px}
+.ana li{font-size:13.5px;line-height:1.9;color:#cbd5e1;margin:4px 0;list-style:none}
+.ana b{color:#93c5fd}
+.good b{color:#fbbf24}.bad b{color:#f87171}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+.pill{display:inline-block;background:#1e293b;border-radius:14px;padding:3px 12px;font-size:12px;color:#93c5fd;margin-right:6px}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="nav"><b>策略回测</b> · <a href="/pms">组合管理</a> · <a href="/results">研究报告</a> · <a href="/research">研究仪表盘</a></div>
+  <h1>生产策略 · 5因子选股（估值×3 + 规模 + 低杠杆）
+    <span class="sub">TopN等权 · 月调仓 · 真实成本（佣金/印花税/滑点）· 涨跌停约束 · PIT全市场含退市股</span></h1>
+  <div style="margin:10px 0">
+    <span class="pill">EP 盈利收益率</span><span class="pill">BP 账面市值比</span><span class="pill">SP 销售收益率</span>
+    <span class="pill">Size 小市值(−)</span><span class="pill">Leverage 低杠杆(−)</span>
+  </div>
+
+  {% for era in eras %}
+  <div class="card">
+    <h3>{{ era.label }} · 净值曲线（组合 vs 基准 vs 等权对照）</h3>
+    <div class="chart" id="eq_{{ era.key }}"></div>
+    <table>
+      <tr><th>组合</th><th>总收益</th><th>年化</th><th>夏普</th><th>最大回撤</th><th>换手/次</th><th>成本占本金</th></tr>
+      <tr><td><b style="color:#fff">5因子生产</b></td>
+        <td class="{{ 'pos' if era.strategy.total_return>=0 else 'neg' }}">{{ '%+.1f'|format(era.strategy.total_return*100) }}%</td>
+        <td>{{ '%+.1f'|format(era.strategy.annual_return*100) }}%</td>
+        <td>{{ '%.2f'|format(era.strategy.sharpe) }}</td>
+        <td class="neg">{{ '%.1f'|format(era.strategy.max_drawdown*100) }}%</td>
+        <td>{{ '%.0f'|format(era.strategy.avg_turnover*100) }}%</td>
+        <td>{{ '%.1f'|format(era.strategy.total_cost_pct*100) }}%</td></tr>
+      {% if era.strategy.benchmark_return is not none %}
+      <tr><td>基准 000300.SH</td><td>{{ '%+.1f'|format(era.strategy.benchmark_return*100) }}%</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+      {% endif %}
+      {% if era.equal_weight %}
+      <tr><td>全池等权对照</td>
+        <td class="{{ 'pos' if era.equal_weight.total_return>=0 else 'neg' }}">{{ '%+.1f'|format(era.equal_weight.total_return*100) }}%</td>
+        <td>{{ '%+.1f'|format(era.equal_weight.annual_return*100) }}%</td>
+        <td>{{ '%.2f'|format(era.equal_weight.sharpe) }}</td>
+        <td class="neg">{{ '%.1f'|format(era.equal_weight.max_drawdown*100) }}%</td><td>—</td><td>—</td></tr>
+      {% endif %}
+    </table>
+    <div class="ychart" id="yr_{{ era.key }}" style="margin-top:12px"></div>
+  </div>
+  {% endfor %}
+
+  <div class="grid2">
+    <div class="card ana good"><h3>✔ 策略优点（均有数据支撑）</h3><ul>
+      <li>◆ <b>两段独立十年样本跑赢等权</b>：2017-2021 +38.8pp、2022-2026 +73pp（全市场PIT口径），选股能力经真样本外验证</li>
+      <li>◆ <b>4/5 年度不输等权对照</b>，2022 熊市 +3.8% vs 等权 -18.0%，具备一定防守性</li>
+      <li>◆ <b>多因子互补去噪</b>：单因子 Top100 全部弱或为负（bp 单用 2022-26 为 -47.7%），合成后 +65%——避开每个维度的极端尾部（价值陷阱/壳股）</li>
+      <li>◆ <b>低换手低成本</b>：月频调仓 + 20% 缓冲带，年成本约 2-5%，适合容量较大的资金</li>
+      <li>◆ <b>PIT 纪律</b>：全市场含退市股、公告日财务、真实费用与涨跌停约束——回测与实盘可对标</li>
+    </ul></div>
+    <div class="card ana bad"><h3>✘ 策略缺点与风险（如实披露）</h3><ul>
+      <li>◆ <b>本质是风格暴露（smart beta）</b>：收益约 2/3 来自小盘+价值 β；β 对冲后残差 2022-26 +25pp、<b>2017-21 为 -31pp</b>——不是全天候 alpha</li>
+      <li>◆ <b>风格逆转风险</b>：大盘蓝筹牛（如 2017-2021 沪深300 +47% vs 策略 +40%）与微盘流动性危机（2024 年初型）会大幅跑输/回撤</li>
+      <li>◆ <b>熊市无系统性防守</b>：2018 型熊市 -27.8%；最大回撤区间 -27% ~ -44%</li>
+      <li>◆ <b>无行业/风格约束</b>：行业暴露随行情漂移；质量/成长因子已验证无增量（多次组合级否决）</li>
+      <li>◆ <b>容量与执行</b>：小市值端流动性有限，资金规模放大后冲击成本上升（当前按 0.1% 滑点估计）</li>
+    </ul></div>
+  </div>
+  <div class="card ana"><h3>证据链与边界（详见研究报告）</h3><ul>
+    <li>检验路径：因子评价 → 组合消融 → 滚动样本外 → 两段十年验证 → β对冲分解 → 指增检验（IR -0.56/+0.34 翻转 → 确认 smart beta 定位）</li>
+    <li>被否决的增强尝试：中性化ROE、一致预期修正、优化器风格约束版（详见 <a href="/results" style="color:#60a5fa">研究报告</a>）</li>
+    <li>适用定位：<b>风格工具/Smart Beta 产品</b>；不适合作为市场中性产品推销</li>
+  </ul></div>
+</div>
+
+<script>
+const eras = {{ eras | tojson }};
+const fmtP = v => (v>=0?'+':'') + (v*100).toFixed(1) + '%';
+eras.forEach(e => {
+  const eq = echarts.init(document.getElementById('eq_' + e.key));
+  const s = e.strategy;
+  const series = [{name:'5因子组合', type:'line', data:s.equity.values, showSymbol:false,
+    lineStyle:{width:2,color:'#f59e0b'}, areaStyle:{opacity:.05}}];
+  const legend = ['5因子组合'];
+  if (s.benchmark_series) { series.push({name:'基准300', type:'line', data:s.benchmark_series.values,
+    showSymbol:false, lineStyle:{width:1.2,color:'#94a3b8'}}); legend.push('基准300'); }
+  if (e.equal_weight && e.equal_weight.benchmark_series) {
+    const ew = e.equal_weight;
+    series.push({name:'等权对照', type:'line', data:ew.equity.values, showSymbol:false,
+      lineStyle:{width:1.2,color:'#38bdf8'}}); legend.push('等权对照'); }
+  eq.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},
+    legend:{data:legend,textStyle:{color:'#94a3b8'}},
+    grid:{left:80,right:20,top:32,bottom:45},
+    xAxis:{type:'category',data:s.equity.dates,axisLabel:{color:'#64748b',interval:40}},
+    yAxis:{type:'value',scale:true,axisLabel:{color:'#64748b'},splitLine:{lineStyle:{color:'#1d2637'}}}});
+  const yr = echarts.init(document.getElementById('yr_' + e.key));
+  const yd = s.yearly;
+  yr.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},
+    grid:{left:70,right:20,top:10,bottom:26},
+    xAxis:{type:'category',data:Object.keys(yd),axisLabel:{color:'#64748b'}},
+    yAxis:{type:'value',axisLabel:{formatter:p=>(p*100).toFixed(0)+'%',color:'#64748b'},splitLine:{lineStyle:{color:'#1d2637'}}},
+    series:[{type:'bar',data:Object.values(yd).map(v=>({value:v,
+      itemStyle:{color:v>=0?'#ef4444':'#22c55e'}})),barWidth:'45%'}]});
+  window.addEventListener('resize',()=>{eq.resize();yr.resize();});
+});
+</script>
+</body>
+</html>
