@@ -6,30 +6,35 @@
 <title>{{ name }}</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f6f8; padding: 24px; }
-.container { max-width: 900px; margin: 0 auto; background: #fff; border-radius: 10px; padding: 32px 40px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-h1 { font-size: 20px; margin: 18px 0 10px; color: #1a1a2e; }
-h2 { font-size: 16px; margin: 16px 0 8px; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 4px; }
-p { font-size: 14px; color: #374151; line-height: 1.7; margin: 6px 0; }
+body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f1420; color: #e5e7eb; padding: 20px; }
+.container { max-width: 940px; margin: 0 auto; background: #161d2e; border: 1px solid #263143; border-radius: 10px; padding: 28px 34px; }
+h1 { font-size: 20px; margin: 18px 0 10px; color: #fff; }
+h2 { font-size: 16px; margin: 16px 0 8px; color: #cbd5e1; border-bottom: 2px solid #263143; padding-bottom: 4px; }
+h3, h4 { font-size: 14px; margin: 12px 0 6px; color: #cbd5e1; }
+p { font-size: 14px; color: #cbd5e1; line-height: 1.7; margin: 6px 0; }
+li { font-size: 14px; color: #cbd5e1; line-height: 1.7; margin: 3px 0 3px 20px; }
 table { border-collapse: collapse; margin: 10px 0; width: 100%; }
-th, td { border: 1px solid #e5e7eb; padding: 6px 10px; font-size: 13px; text-align: left; }
-th { background: #f9fafb; }
-blockquote { border-left: 4px solid #f59e0b; background: #fffbeb; padding: 8px 14px; margin: 10px 0; font-size: 13px; color: #78350f; }
-code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
-.back { margin-bottom: 16px; font-size: 13px; }
+th, td { border: 1px solid #263143; padding: 6px 10px; font-size: 13px; text-align: left; }
+th { background: #1e293b; color: #94a3b8; }
+blockquote { border-left: 4px solid #f59e0b; background: rgba(245, 158, 11, .08); padding: 8px 14px; margin: 10px 0; font-size: 13px; color: #fcd34d; }
+code { background: #1e293b; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.back { margin-bottom: 16px; font-size: 13px; display: flex; gap: 16px; }
+.back a { color: #60a5fa; text-decoration: none; } .back a:hover { text-decoration: underline; }
+hr { border: none; border-top: 1px solid #263143; margin: 14px 0; }
+strong { color: #fff; }
 </style>
 </head>
 <body>
 <div class="container">
   <div class="back jnav">
-      {% if nav %}
-        {% if nav.prev %}<a href="/results/view/{{ nav.prev }}.md">← 前一日（{{ nav.prev }}）</a>{% endif %}
-        <a href="/results">日历</a>
-        {% if nav.next %}<a href="/results/view/{{ nav.next }}.md">后一日（{{ nav.next }}）→</a>{% endif %}
-      {% else %}
-        <a href="/results">← 返回列表</a>
-      {% endif %}
-    </div>
+    {% if nav %}
+      {% if nav.prev %}<a href="/results/view/{{ nav.prev }}.md">← 前一日（{{ nav.prev }}）</a>{% endif %}
+      <a href="/results">📅 日历</a>
+      {% if nav.next %}<a href="/results/view/{{ nav.next }}.md">后一日（{{ nav.next }}）→</a>{% endif %}
+    {% else %}
+      <a href="/results">← 返回列表</a>
+    {% endif %}
+  </div>
   {{ content | safe }}
 </div>
 </body>
