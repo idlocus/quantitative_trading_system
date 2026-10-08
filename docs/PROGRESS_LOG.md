@@ -1087,3 +1087,25 @@ Paper 模式跟跑 2-4 周（每日收盘后 run_live --signal --execute paper -
   早盘:  python run_daily.py --phase am
   收盘后: python run_daily.py --phase pm --execute paper
   或收盘后一次: python run_daily.py --execute paper
+
+## Session: 2026-10-08 (PMS 完善与服务稳定性攻坚)
+
+### 新功能
+- 个股钻取 Wind 化：MA5/10/20/30、双击K线任意位置看当日分时（新浪1分钟线，
+  免费源仅近几日）、买卖点/成本线、画布级双击（像素转索引）
+- 推荐逻辑生成器（webapp/rationale.py）：5因子信号翻译为人话推荐理由
+  （估值/质量/规模+全市场分位+综合评分+风险提示），负ROE诚实标注
+- 成交记录带时间戳+交易逻辑（note持久化，旧记录由推荐逻辑摘要回填）
+- 全站统一红涨绿跌；归因条目可点击跳个股
+
+### 稳定性攻坚（四轮定位，最终根因：预热线程结束会终止 waitress 主循环）
+1. 并发加载踩踏 → 加载锁（真实修复了缓存击穿）
+2. dev server → waitress 8线程生产服务器
+3. 进程父子关系 → 脱离会话启动（排除）
+4. 二分法（无预热=存活）→ 坐实预热线程；改为启动时同步预热（40秒不接客）
+顺带修复：rationale 锁补丁 NameError、JS 引号塌陷、K线宽度塌陷、NaN 残缺行
+制度沉淀：前端改动必须过 esprima 语法校验；静态文件版本号防缓存
+
+### 当前状态
+- webapp 稳定运行（waitress+同步预热），页面/推荐逻辑均毫秒-秒级响应
+- Paper 账本 30 持仓，每日 16:30 计划任务自动运行（QuantDaily）
