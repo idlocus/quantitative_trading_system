@@ -126,6 +126,9 @@ eras.forEach(e => {
     grid:{left:80,right:20,top:32,bottom:45},
     xAxis:{type:'category',data:s.equity.dates,axisLabel:{color:'#64748b',interval:40}},
     yAxis:{type:'value',scale:true,axisLabel:{color:'#64748b'},splitLine:{lineStyle:{color:'#1d2637'}}}});
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ eq.resize(); yr.resize();
+    document.getElementById('diagLine').innerHTML += ' | 图宽:' + eq.getWidth() + 'px 高:' + eq.getHeight() + 'px';
+  }));
   const yr = echarts.init(document.getElementById('yr_' + e.key));
   const yd = s.yearly;
   yr.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis'},
