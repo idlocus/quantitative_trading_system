@@ -49,6 +49,53 @@ def index():
     return render_template('pms.html')
 
 
+@bp.route('/api/intraday/<symbol>/<day>')
+def api_intraday(symbol, day):
+    """分时数据（新浪1分钟线，免费源仅近几个交易日）"""
+    import pandas as pd
+    try:
+        import akshare as ak
+        pre = {'6': 'sh', '0': 'sz', '3': 'sz', '4': 'bj', '8': 'bj', '9': 'bj'}.get(symbol[0], 'sh')
+        raw = ak.stock_zh_a_minute(symbol=f"{pre}{symbol.split('.')[0]}", period='1', adjust='')
+    except Exception as e:
+        return jsonify({'error': f'分时数据获取失败: {e}'}), 502
+
+    raw['day'] = raw['day'].astype(str)
+    sub = raw[raw['day'].str.startswith(day)]
+    if sub.empty:
+        return jsonify({'error': f'{day} 无分时数据（免费源仅保留近几个交易日）'}), 404
+
+    price = sub['close'].astype(float)
+    vol = sub['volume'].astype(float)
+    # 均价线（累计成交量加权）与前收盘（用于红绿着色）
+    cum_pv = (price * vol).cumsum() / vol.cumsum().replace(0, float('nan'))
+    df_full = _kline_df(symbol)
+    prev_close = None
+    if df_full is not None and not df_full.empty:
+        d = df_full[df_full['date'].astype(str).str[:10] < day]
+        if not d.empty:
+            prev_close = float(d['close'].iloc[-1])
+
+    return jsonify({
+        'symbol': symbol, 'day': day, 'prev_close': prev_close,
+        'times': [t[11:16] for t in sub['day']],
+        'price': [round(float(v), 3) for v in price],
+        'avg': [None if pd.isna(v) else round(float(v), 3) for v in cum_pv],
+        'volume': [float(v) for v in vol],
+    })
+
+
+def _kline_df(symbol):
+    import pandas as pd
+    path = os.path.join(ROOT, 'data_cache', 'kline', f"{symbol.replace('.', '_')}.parquet")
+    if os.path.exists(path):
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            return None
+    return None
+
+
 @bp.route('/api/symbol/<symbol>')
 def api_symbol(symbol):
     """个股钻取：K线（近250日）+ 该股成交记录 + 当前持仓 + 成本线"""
@@ -81,9 +128,8 @@ def api_symbol(symbol):
     # 剔除残缺行（当日快照可能只有收盘价，NaN会破坏蜡烛图）
     df = df.dropna(subset=['open', 'high', 'low', 'close', 'volume'])
     df = df.tail(250)
-    # MA5 / MA20
-    ma5 = df['close'].rolling(5).mean()
-    ma20 = df['close'].rolling(20).mean()
+    # MA 均线组（Wind 默认 5/10/20/30）
+    mas = {f'ma{n}': df['close'].rolling(n).mean() for n in (5, 10, 20, 30)}
 
     try:
         with open(LEDGER_PATH, encoding='utf-8') as f:
@@ -99,8 +145,8 @@ def api_symbol(symbol):
             'ohlc': [[round(float(o), 2), round(float(c), 2), round(float(l), 2), round(float(h), 2)]
                      for o, c, l, h in zip(df['open'], df['close'], df['low'], df['high'])],
             'volume': [float(v) for v in df['volume']],
-            'ma5': [None if pd.isna(v) else round(float(v), 2) for v in ma5],
-            'ma20': [None if pd.isna(v) else round(float(v), 2) for v in ma20],
+            **{k: [None if pd.isna(v) else round(float(v), 2) for v in series]
+               for k, series in mas.items()},
         },
         'trades': [t for t in ledger.get('trades', []) if t['symbol'] == symbol],
         'position': {
