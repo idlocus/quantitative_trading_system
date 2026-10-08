@@ -21,7 +21,7 @@ h1 .sub{font-size:12px;color:#64748b;font-weight:400}
 .tile{background:#111827;border:1px solid #263143;border-radius:10px;padding:12px 14px}
 .tile .k{font-size:11px;color:#94a3b8;margin-bottom:3px}
 .tile .v{font-size:19px;font-weight:700;color:#fff}
-.pos{color:#34d399!important}.neg{color:#f87171!important}
+.pos{color:#f87171!important}.neg{color:#34d399!important}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{color:#94a3b8;text-align:right;padding:8px 10px;border-bottom:1px solid #263143;cursor:pointer;white-space:nowrap}
 th:hover{color:#e2e8f0}
@@ -34,6 +34,7 @@ tr:hover td{background:#1a2333}
 #contribChart{width:100%;height:300px}
 #cumChart{width:100%;height:300px}
 .empty{color:#64748b;text-align:center;padding:40px;font-size:14px}
+.sym{cursor:pointer;color:#93c5fd}.sym:hover{text-decoration:underline}
 .badge{display:inline-block;background:#1e293b;color:#93c5fd;border-radius:5px;padding:1px 8px;font-size:11px}
 .refresh{font-size:12px;color:#64748b}
 </style>
@@ -81,6 +82,23 @@ tr:hover td{background:#1a2333}
     <div class="card"><h3>当日个股贡献（红=亏损 绿=盈利）</h3><div id="contribChart"></div></div>
     <div class="card"><h3>累计持仓盈亏（按股票）</h3><div id="cumChart"></div></div>
   </div>
+
+<!-- 个股钻取弹窗 -->
+<div id="symModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:99;overflow:auto;padding:30px">
+  <div style="max-width:1000px;margin:0 auto;background:#161d2e;border:1px solid #263143;border-radius:12px;padding:20px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+      <h3 id="symTitle" style="color:#fff"></h3>
+      <button onclick="document.getElementById('symModal').style.display='none'"
+        style="background:#1e293b;color:#94a3b8;border:none;border-radius:6px;padding:6px 14px;cursor:pointer">关闭 ✕</button>
+    </div>
+    <div id="kChart" style="width:100%;height:420px"></div>
+    <div style="margin-top:14px">
+      <h4 style="color:#cbd5e1;font-size:13px;margin-bottom:8px">该股交易记录与逻辑</h4>
+      <div style="overflow:auto;max-height:200px"><table id="symTrades"></table></div>
+    </div>
+  </div>
+</div>
+
 </div>
 
 <script>
@@ -126,7 +144,7 @@ function renderNav(){
 }
 function posRows(data){
   return data.map(p=>`<tr>
-    <td class="l"><b>${p.symbol}</b></td><td>${fmt(p.qty)}</td><td>${p.cost.toFixed(2)}</td>
+    <td class="l"><b class="sym" onclick="showSymbol('${p.symbol}')">${p.symbol}</b></td><td>${fmt(p.qty)}</td><td>${p.cost.toFixed(2)}</td>
     <td>${p.price.toFixed(2)}</td><td class="${cls(p.day_chg)}">${p.day_chg>=0?'+':''}${pct(p.day_chg)}</td>
     <td class="${cls(p.pnl)}">${p.pnl>=0?'+':''}${fmt(p.pnl)}</td>
     <td>${pct(p.weight)}</td></tr>`).join('');
@@ -148,10 +166,10 @@ function renderTrades(){
   const t=DATA.trades;
   if(!t.length){document.getElementById('tradeTable').innerHTML='<tr><td class="empty">暂无成交</td></tr>';return;}
   document.getElementById('tradeTable').innerHTML=`<tr><th class="l">日期</th><th class="l">代码</th><th class="l">方向</th>
-    <th>价格</th><th>数量</th><th>佣金</th><th>税费</th></tr>`+
-    t.map(x=>`<tr><td class="l">${x.date}</td><td class="l"><b>${x.symbol}</b></td>
+    <th>价格</th><th>数量</th><th>佣金</th><th>税费</th><th class="l">交易逻辑</th></tr>`+
+    t.map(x=>`<tr><td class="l">${(x.time||x.date).replace('T',' ')}</td><td class="l"><b class="sym" onclick="showSymbol('${x.symbol}')">${x.symbol}</b></td>
     <td class="l"><span class="badge" style="color:${x.side==='BUY'?'#34d399':'#f87171'}">${x.side==='BUY'?'买入':'卖出'}</span></td>
-    <td>${x.price.toFixed(2)}</td><td>${fmt(x.quantity)}</td><td>${x.commission.toFixed(2)}</td><td>${x.taxes.toFixed(2)}</td></tr>`).join('');
+    <td>${x.price.toFixed(2)}</td><td>${fmt(x.quantity)}</td><td>${x.commission.toFixed(2)}</td><td>${x.taxes.toFixed(2)}</td><td class="l" style="color:#94a3b8">${x.note||'建仓买入'}</td></tr>`).join('');
 }
 function renderAttr(){
   const ps=[...DATA.positions];
@@ -174,6 +192,49 @@ function renderAttr(){
     series:[{type:'bar',data:cum.map(x=>({value:x.pnl,itemStyle:{color:x.pnl>=0?'#34d399':'#f87171'}})),barWidth:'60%'}]});
   window.addEventListener('resize',()=>{c.resize();cc.resize();});
 }
+
+async function showSymbol(sym){
+  document.getElementById('symModal').style.display='block';
+  document.getElementById('symTitle').textContent=sym+' · 日K（红涨绿跌）';
+  const r=await fetch('/pms/api/symbol/'+sym); const d=await r.json();
+  if(d.error){document.getElementById('symTitle').textContent=sym+' · '+d.error;return;}
+  const k=d.kline;
+  const buys=d.trades.filter(t=>t.side==='BUY'), sells=d.trades.filter(t=>t.side==='SELL');
+  // 买卖点：交易日索引上打标记
+  const mk=(arr,label,color)=>arr.map(t=>{
+    const i=k.dates.indexOf(t.date);
+    return i<0?null:{coord:[i,k.ohlc[i]?k.ohlc[i][3]:0],symbol:'triangle',symbolSize:10,
+      itemStyle:{color},label:{show:true,formatter:label,position:'top',color}};
+  }).filter(Boolean);
+  const c=echarts.init(document.getElementById('kChart'));
+  c.setOption({backgroundColor:'transparent',tooltip:{trigger:'axis',axisPointer:{type:'cross'}},
+    legend:{data:['MA5','MA20'],textStyle:{color:'#94a3b8'}},
+    grid:[{left:60,right:20,top:30,height:250},{left:60,right:20,top:300,height:60}],
+    xAxis:[{type:'category',data:k.dates,axisLabel:{color:'#64748b'}},
+           {type:'category',gridIndex:1,data:k.dates,axisLabel:{show:false}}],
+    yAxis:[{scale:true,axisLabel:{color:'#64748b'},splitLine:{lineStyle:{color:'#1d2637'}}},
+           {gridIndex:1,axisLabel:{show:false},splitLine:{show:false}}],
+    dataZoom:[{type:'inside',xAxisIndex:[0,1]},{type:'slider',top:370}],
+    series:[
+      {name:sym,type:'candlestick',data:k.ohlc,
+       itemStyle:{color:#ef4444,color0:#22c55e,borderColor:#ef4444,borderColor0:#22c55e},
+       markPoint:{data:[...mk(buys,'买','#f59e0b'),...mk(sells,'卖','#38bdf8')]},
+       markLine:d.position.cost>0?{symbol:'none',lineStyle:{color:'#f59e0b',type:'dashed'},
+         label:{color:'#f59e0b',formatter:'成本 '+d.position.cost.toFixed(2)},
+         data:[{yAxis:d.position.cost}]}:undefined},
+      {name:'MA5',type:'line',data:k.ma5,showSymbol:false,lineStyle:{width:1,color:'#fbbf24'}},
+      {name:'MA20',type:'line',data:k.ma20,showSymbol:false,lineStyle:{width:1,color:'#60a5fa'}},
+      {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,
+       data:k.volume.map((v,i)=>({value:v,itemStyle:{color:k.ohlc[i]&&k.ohlc[i][1]>=k.ohlc[i][0]?'#ef4444':'#22c55e',opacity:.6}}))}]});
+  window.addEventListener('resize',()=>c.resize());
+  document.getElementById('symTrades').innerHTML=`<tr><th class="l">时间</th><th class="l">方向</th>
+    <th>价格</th><th>数量</th><th>佣金</th><th>税费</th><th class="l">交易逻辑</th></tr>`+
+    d.trades.map(t=>`<tr><td class="l">${(t.time||t.date).replace('T',' ')}</td>
+    <td class="l"><span class="badge" style="color:${t.side==='BUY'?'#f87171':'#34d399'}">${t.side==='BUY'?'买入':'卖出'}</span></td>
+    <td>${t.price.toFixed(2)}</td><td>${fmt(t.quantity)}</td><td>${t.commission.toFixed(2)}</td><td>${t.taxes.toFixed(2)}</td>
+    <td class="l" style="color:#94a3b8">${t.note||'建仓买入（5因子Top30入选）'}</td></tr>`).join('')||'<tr><td class="empty">无交易记录</td></tr>';
+}
+
 load();
 setInterval(load, 60000);  // 每分钟自动刷新
 </script>

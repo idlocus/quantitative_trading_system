@@ -49,6 +49,65 @@ def index():
     return render_template('pms.html')
 
 
+@bp.route('/api/symbol/<symbol>')
+def api_symbol(symbol):
+    """个股钻取：K线（近250日）+ 该股成交记录 + 当前持仓 + 成本线"""
+    import pandas as pd
+
+    def _kline_from_parquet(sym):
+        path = os.path.join(ROOT, 'data_cache', 'kline', f"{sym.replace('.', '_')}.parquet")
+        if not os.path.exists(path):
+            return pd.DataFrame()
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            return pd.DataFrame()
+
+    df = _kline_from_parquet(symbol)
+    if df.empty:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+            from data.layered import LayeredDataSource
+            from datetime import date, timedelta
+            ds = LayeredDataSource()
+            df = ds.preload_batch([symbol], date.today() - timedelta(days=450), date.today())\
+                .get(symbol, pd.DataFrame())
+        except Exception:
+            df = pd.DataFrame()
+    if df.empty:
+        return jsonify({'error': f'无 {symbol} K线数据'}), 404
+
+    df = df.tail(250)
+    # MA5 / MA20
+    ma5 = df['close'].rolling(5).mean()
+    ma20 = df['close'].rolling(20).mean()
+
+    try:
+        with open(LEDGER_PATH, encoding='utf-8') as f:
+            ledger = json.load(f)
+    except FileNotFoundError:
+        ledger = {'positions': {}, 'cost': {}, 'trades': []}
+
+    return jsonify({
+        'symbol': symbol,
+        'kline': {
+            'dates': [str(d)[:10] for d in df['date']],
+            # ECharts candlestick: [open, close, low, high]
+            'ohlc': [[round(float(o), 2), round(float(c), 2), round(float(l), 2), round(float(h), 2)]
+                     for o, c, l, h in zip(df['open'], df['close'], df['low'], df['high'])],
+            'volume': [float(v) for v in df['volume']],
+            'ma5': [None if pd.isna(v) else round(float(v), 2) for v in ma5],
+            'ma20': [None if pd.isna(v) else round(float(v), 2) for v in ma20],
+        },
+        'trades': [t for t in ledger.get('trades', []) if t['symbol'] == symbol],
+        'position': {
+            'qty': ledger.get('positions', {}).get(symbol, 0),
+            'cost': ledger.get('cost', {}).get(symbol, 0),
+        },
+    })
+
+
 @bp.route('/api/data')
 def api_data():
     try:

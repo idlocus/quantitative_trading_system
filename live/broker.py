@@ -72,6 +72,9 @@ class PaperBroker(Broker):
         return 'PaperBroker'
 
     def execute(self, orders, prices, trade_date, prev_prices: Optional[Dict[str, float]] = None):
+        from datetime import datetime as _dt
+        if isinstance(trade_date, date) and not isinstance(trade_date, _dt):
+            trade_date = _dt.combine(trade_date, _dt.now().time())  # 记录真实执行时刻
         fills = []
         for o in orders:
             raw = prices.get(o.symbol)

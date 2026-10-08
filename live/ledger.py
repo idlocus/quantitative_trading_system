@@ -70,11 +70,13 @@ class Ledger:
                 if self._d['positions'][sym] <= 0:
                     self._d['positions'].pop(sym, None)
                     self._d['cost'].pop(sym, None)
+            ts = str(f.trade_date)  # date 或 datetime
             self._d['trades'].append({
-                'date': str(f.trade_date), 'symbol': sym, 'side': f.order.side,
+                'date': ts[:10], 'time': ts, 'symbol': sym, 'side': f.order.side,
                 'price': f.price, 'quantity': f.quantity,
                 'commission': f.commission, 'taxes': f.taxes,
                 'target_weight': f.order.target_weight,
+                'note': getattr(f.order, 'note', '') or '',
             })
         self.save()
 
