@@ -8,7 +8,7 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f1420; color: #e5e7eb; padding: 20px; }
 .container { max-width: 1080px; margin: 0 auto; }
-h1 { font-size: 20px; color: #fff; }
+h1 { font-size: 20px; color: #fff; display: flex; justify-content: space-between; align-items: center; }
 h1 .sub { font-size: 12px; color: #64748b; font-weight: 400; }
 .nav { margin: 10px 0 16px; font-size: 13px; display: flex; gap: 18px; align-items: center; }
 .nav a { color: #60a5fa; text-decoration: none; } .nav a:hover { text-decoration: underline; }
@@ -29,64 +29,7 @@ details summary { cursor: pointer; font-size: 14px; color: #cbd5e1; }
 </head>
 <body>
 <div class="container">
-  <div class="nav"><a href="/pms">组合管理</a><a href="/strategy">策略回测</a><b>每日交易报告</b><a href="/research">研究仪表盘</a></div>
   <h1>PMS · 每日交易报告 <span class="sub">数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
   <div class="nav"><a href="/pms">组合管理</a><a href="/strategy">策略回测</a><b>每日交易报告</b><a href="/research">研究仪表盘</a>
     <span class="refresh">刷新于 <script>document.write(new Date().toLocaleTimeString())</script></span>
   </div>
-  <!-- old_h1 --> <span class="sub">每个交易日一份：盘前展望 / 决策依据 / 成交 / 持仓归因 / 收盘点评</span></h1>
-
-  <div class="card">
-    <h3>📅 交易日历（{{ journals|length }} 个交易日）</h3>
-    {% if journals %}
-    <div style="overflow:auto">
-    <table>
-      <thead><tr><th>日期</th><th class="r">账户净值</th><th class="r">累计盈亏</th><th class="r">当日成交</th><th class="r">持仓数</th><th class="r">市场(300)</th><th class="r"></th></tr></thead>
-      <tbody>
-      {% for j in journals %}
-        <tr>
-          <td><a href="/results/view/{{ j.date }}.md"><b>{{ j.date }}</b></a> <span class="muted">{{ j.weekday[:3] }}</span></td>
-          <td class="r">{{ j.nav or '—' }}</td>
-          <td class="r {% if j.total_pnl and j.total_pnl.startswith('+') %}pos{% elif j.total_pnl %}neg{% endif %}">{{ j.total_pnl or '—' }}</td>
-          <td class="r">{{ j.trades }} 笔</td>
-          <td class="r">{{ j.positions }}</td>
-          <td class="r">{{ j.mkt or '—' }}</td>
-          <td class="r"><a href="/results/view/{{ j.date }}.md">报告 →</a></td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    {% else %}
-    <div class="empty">暂无交易日志（Paper 跟跑每个交易日自动生成：python main.py daily）</div>
-    {% endif %}
-  </div>
-
-  <div class="card">
-    <details>
-      <summary>📁 研究档案（{{ reports|length }} 份历史报告）</summary>
-      <div style="overflow:auto;max-height:400px;margin-top:10px">
-      <table>
-        <thead><tr><th>分类</th><th>报告</th><th>修改时间</th><th class="r">大小</th></tr></thead>
-        <tbody>
-        {% for it in reports %}
-          <tr>
-            <td><span class="badge">{{ it.category }}</span></td>
-            <td>
-              {% if it.is_html %}<a href="/results/view/{{ it.name }}" target="_blank">{{ it.name }}</a>
-              {% else %}<a href="/results/view/{{ it.name }}">{{ it.name }}</a>{% endif %}
-            </td>
-            <td>{{ it.mtime }}</td>
-            <td class="r">{{ it.size_kb }} KB</td>
-          </tr>
-        {% else %}
-          <tr><td colspan="4" class="empty">暂无研究档案</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      </div>
-    </details>
-  </div>
-</div>
-</body>
-</html>
