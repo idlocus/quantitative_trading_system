@@ -1071,3 +1071,19 @@ Paper 模式跟跑 2-4 周（每日收盘后 run_live --signal --execute paper -
   → 账本入账 → 净值 998,692（成本拖累 0.13%，符合预期：印花税+滑点+佣金≈0.14%单边）
 - 账本含持仓成本（如 688279.SH 167股@199.51）
 - 至此实盘准备代码侧全部就位，待QMT券商环境
+
+## Session: 2026-10-08 (每日交易日志)
+
+### live/journal.py + run_daily.py（新）
+- 每日一份 journal/YYYY-MM-DD.md，六章节：
+  盘前市场展望（基准/ADX/环境评分，昨收PIT）→ 盘前决策依据（信号/指令/
+  新入选因子画像）→ 盘前风控检查 → 成交记录 → 持仓与归因（当日贡献
+  top/bottom）→ 收盘点评（自动事实性观察+明日计划）
+- CLI: --phase am|pm|full，--execute paper；am/pm 分时追加同一文件
+- webapp /results 新增"每日交易日志"分类（journal/ 目录，git跟踪）
+- tests/test_journal.py 3用例，全量 115 passed
+
+### 每日操作流程（Paper 验证期）
+  早盘:  python run_daily.py --phase am
+  收盘后: python run_daily.py --phase pm --execute paper
+  或收盘后一次: python run_daily.py --execute paper

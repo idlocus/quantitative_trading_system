@@ -12,6 +12,7 @@ import markdown
 bp = Blueprint('results', __name__, url_prefix='/results')
 
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
+JOURNAL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'journal')
 
 # 文件名前缀 → 分类标签
 CATEGORIES = [
@@ -44,17 +45,19 @@ def _mtime(path) -> str:
 
 @bp.route('/')
 def index():
-    """研究结果列表页"""
+    """研究结果列表页（含每日交易日志）"""
     items = []
-    if os.path.isdir(RESULTS_DIR):
-        for fn in sorted(os.listdir(RESULTS_DIR), reverse=True):
-            path = os.path.join(RESULTS_DIR, fn)
+    for base_dir, default_cat in ((RESULTS_DIR, None), (JOURNAL_DIR, '每日交易日志')):
+        if not os.path.isdir(base_dir):
+            continue
+        for fn in sorted(os.listdir(base_dir), reverse=True):
+            path = os.path.join(base_dir, fn)
             if not os.path.isfile(path) or fn.startswith('.'):
                 continue
             if fn.endswith(('.md', '.html')):
                 items.append({
                     'name': fn,
-                    'category': _category(fn),
+                    'category': default_cat or _category(fn),
                     'mtime': _mtime(path),
                     'is_html': fn.endswith('.html'),
                     'size_kb': os.path.getsize(path) // 1024,
@@ -64,11 +67,14 @@ def index():
 
 @bp.route('/view/<path:name>')
 def view(name):
-    """渲染 Markdown 或直接返回 HTML 报告"""
+    """渲染 Markdown 或直接返回 HTML 报告（results 与 journal 目录）"""
     if '/' in name or '..' in name:
         abort(404)
-    path = os.path.join(RESULTS_DIR, name)
-    if not os.path.isfile(path):
+    for base_dir in (RESULTS_DIR, JOURNAL_DIR):
+        path = os.path.join(base_dir, name)
+        if os.path.isfile(path):
+            break
+    else:
         abort(404)
 
     if name.endswith('.html'):
