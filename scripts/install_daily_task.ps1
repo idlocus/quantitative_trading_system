@@ -11,7 +11,7 @@ if (-not (Test-Path $python)) { throw "未找到 venv Python: $python" }
 
 $action  = New-ScheduledTaskAction -Execute $python -Argument "main.py daily" -WorkingDirectory $root
 # 工作日 16:30（收盘后数据基本就绪；节假日运行会因无新数据而零交易，无害）
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At 16:30
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At ([datetime]'16:30')
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
 Register-ScheduledTask -TaskName "QuantDaily" -Action $action -Trigger $trigger `

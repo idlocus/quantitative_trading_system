@@ -90,6 +90,10 @@ class JournalWriter:
 
         with open(self.path, 'w', encoding='utf-8') as f:
             f.write("\n".join(lines))
+            # 同日重复运行：保留已有的盘后章节（成交/归因不可再生），仅刷新盘前
+            if os.path.exists(self.path + '.pm'):
+                with open(self.path + '.pm', encoding='utf-8') as pf:
+                    f.write("\n" + pf.read())
         return {'targets': targets, 'scores': scores, 'orders': orders, 'prev_trading': prev_trading}
 
     # ================= PM：盘后 =================
@@ -152,6 +156,9 @@ class JournalWriter:
         lines += self._closing_comment(ds, as_of, prices_prev, prices_today)
 
         with open(self.path, 'a', encoding='utf-8') as f:
+            f.write("\n".join(lines))
+        # 盘后章节另存副本，供同日重复运行 daily 时保留
+        with open(self.path + '.pm', 'a', encoding='utf-8') as f:
             f.write("\n".join(lines))
         return self.path
 
