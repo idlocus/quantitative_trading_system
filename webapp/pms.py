@@ -78,6 +78,8 @@ def api_symbol(symbol):
     if df.empty:
         return jsonify({'error': f'无 {symbol} K线数据'}), 404
 
+    # 剔除残缺行（当日快照可能只有收盘价，NaN会破坏蜡烛图）
+    df = df.dropna(subset=['open', 'high', 'low', 'close', 'volume'])
     df = df.tail(250)
     # MA5 / MA20
     ma5 = df['close'].rolling(5).mean()
