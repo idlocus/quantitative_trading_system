@@ -8,7 +8,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#0f1420;color:#e5e7eb;padding:20px}
 .container{max-width:1280px;margin:0 auto}
-h1{font-size:20px;color:#fff}h1 .sub{font-size:12px;color:#64748b;font-weight:400}
+h1{font-size:20px;color:#fff;display:flex;justify-content:space-between;align-items:center}h1 .sub{font-size:12px;color:#64748b;font-weight:400}
 .nav{margin:10px 0 16px;font-size:13px;display:flex;gap:18px;align-items:center}
 .nav a{color:#60a5fa;text-decoration:none}.nav a:hover{text-decoration:underline}
 .card{background:#161d2e;border:1px solid #263143;border-radius:10px;padding:16px;margin-bottom:16px}
@@ -31,13 +31,15 @@ td{padding:7px 10px;text-align:right;border-bottom:1px solid #1d2637;color:#cbd5
 <body>
 <div id="diagLine" style="font-size:12px;color:#64748b;padding:6px 10px;background:#111827;border-radius:6px;margin-bottom:10px">环境检测中…</div>
 <div class="container">
-  <h1>策略回测 <span class=sub>数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
-  <div class=nav>
-    <a href=/pms>组合管理</a><b>策略回测</b><a href=/results>每日交易报告</a><a href=/research>研究仪表盘</a>
-    <span class=refresh>刷新于 <script>document.write(new Date().toLocaleTimeString())</script></span>
+  <h1>PMS · 策略回测 <span class="sub">数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
+  <div class="nav">
+    <a href="/pms">组合管理</a><b>策略回测</b><a href="/results">每日交易报告</a><a href="/research">研究仪表盘</a>
+    <span class="refresh">刷新于 <script>document.write(new Date().toLocaleTimeString())</script></span>
   </div>
-  <h1>生产策略 · 5因子选股（估值×3 + 规模 + 低杠杆）
-    <span class="sub">TopN等权 · 月调仓 · 真实成本（佣金/印花税/滑点）· 涨跌停约束 · PIT全市场含退市股</span></h1>
+  <div style="font-size:13px;color:#94a3b8;margin:14px 0 8px">
+    <b style="color:#cbd5e1">生产策略 · 5因子选股（估值×3 + 规模 + 低杠杆）</b><br>
+    TopN等权 · 月调仓 · 真实成本（佣金/印花税/滑点）· 涨跌停约束 · PIT全市场含退市股
+  </div>
   <div style="margin:10px 0">
     <span class="pill">EP 盈利收益率</span><span class="pill">BP 账面市值比</span><span class="pill">SP 销售收益率</span>
     <span class="pill">Size 小市值(−)</span><span class="pill">Leverage 低杠杆(−)</span>
