@@ -12,16 +12,25 @@ import os
 from .database import BacktestDB
 from .results_view import bp as results_bp
 from .dashboard import bp as dashboard_bp
+from .pms import bp as pms_bp
 
 app = Flask(__name__)
 db = BacktestDB(os.path.join(os.path.dirname(__file__), 'backtest.db'))
 app.register_blueprint(results_bp)
 app.register_blueprint(dashboard_bp)
+app.register_blueprint(pms_bp)
 
 
 @app.route('/')
 def index():
-    """Home page - list all backtests"""
+    """首页 → PMS（组合管理）"""
+    from flask import redirect
+    return redirect('/pms')
+
+
+@app.route('/backtests')
+def backtests_page():
+    """历史回测记录"""
     backtests = db.list_backtests(limit=20)
     return render_template('index.html', backtests=backtests)
 
