@@ -7,7 +7,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#0f1420;color:#e5e7eb;padding:20px}
 .container{max-width:1180px;margin:0 auto}
-h1{font-size:20px;color:#fff;display:flex;justify-content:space-between;align-items:center}
+h1{font-size:20px;color:#fff}
 h1 .sub{font-size:12px;color:#64748b;font-weight:400}
 .nav{margin:10px 0 16px;font-size:13px;display:flex;gap:18px;align-items:center}
 .nav a{color:#60a5fa;text-decoration:none}.nav a:hover{text-decoration:underline}
@@ -32,7 +32,60 @@ a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}
 </head>
 <body>
 <div class="container">
-  <h1>PMS · 研究仪表盘 <span class="sub">数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
   <div class="nav"><a href="/pms">组合管理</a><a href="/strategy">策略回测</a><a href="/results">每日交易报告</a><b>研究仪表盘</b>
-    <span class="refresh">刷新于 <script>document.write(new Date().toLocaleTimeString())</script></span>
+    <span style="color:#64748b;font-size:12px;margin-left:12px">刷新于 <script>document.write(new Date().toLocaleTimeString())</script></span></div>
+  <h1>PMS · 研究仪表盘 <span class="sub">数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
+  <div style="color:#64748b;font-size:12px;margin:4px 0">全部实验证据库——生产策略为什么长这样</div>
+
+  <div class="intro">
+    这个页面记录了策略研发中<b>所有实验的结果</b>，包括最终采用的方案和被否决的方案。
+    它回答一个问题：<b>为什么生产策略是现在这个样子，而不是别的？</b><br>
+    阅读方式：✔<b style="color:#34d399">绿色标签</b>=验证通过进入生产 · ✘<b style="color:#f87171">红色标签</b>=被否决（点击行可看净值曲线详情）
   </div>
+
+  {% for era in eras %}
+  <div class="era">
+    {% set verdict = 'v-no' if ('否决' in era.note or '指增' in era.label) else ('v-info' if '分解' in era.note or '消融' in era.note else 'v-ok') %}
+    {% set vtext = '✘ 被否决' if '否决' in era.note else ('ⓘ 收益分解' if '分解' in era.note else ('ⓘ 因子消融' if '消融' in era.note else '✔ 验证通过')) %}
+    <h2>{{ era.label }}<span class="verdict {{ verdict }}">{{ vtext }}</span>
+      {% if era.benchmark_return is not none %}<span class="bench">基准 {{ '%+.1f'|format(era.benchmark_return*100) }}%</span>{% endif %}
+    </h2>
+    {% if era.note %}<div class="note">{{ era.note }}</div>{% endif %}
+    <table>
+      <tr><th>组合</th><th>总收益</th><th>年化</th><th>夏普</th><th>回撤</th><th>换手/次</th><th>成本</th></tr>
+      {% for variant, m in era.cols.items() %}
+      <tr>
+        <td><a href="/research/view/portfolio/{{ m._file | replace('portfolio_','') }}">{{ variant }}</a></td>
+        <td class="{{ 'pos' if m.total_return>=0 else 'neg' }}">{{ '%+.1f'|format(m.total_return*100) }}%</td>
+        <td>{{ '%+.1f'|format(m.annual_return*100) }}%</td>
+        <td>{{ '%.2f'|format(m.sharpe) }}</td>
+        <td class="neg">{{ '%.1f'|format(m.max_drawdown*100) }}%</td>
+        <td>{{ '%.0f'|format(m.avg_turnover*100) }}%</td>
+        <td>{{ '%.1f'|format(m.total_cost_pct*100) }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endfor %}
+
+  {% if factors %}
+  <div class="era">
+    <h2>因子评价（BP@60日前瞻）<span class="verdict v-info">ⓘ 因子层证据</span></h2>
+    <div class="note">因子层面的预测力检验——IC 为正且 IR 稳定，说明"便宜的房子长期跑赢"这类规律在此因子上成立</div>
+    <table>
+      <tr><th>样本段</th><th>RankIC</th><th>IR</th><th>多空年化</th><th>换手/期</th></tr>
+      {% for f in factors %}
+      <tr>
+        <td><a href="/research/view/factor/{{ f._file | replace('factor_','') }}">{{ f._name if f._name is defined else f._file }}</a></td>
+        <td class="{{ 'pos' if f.rankic_mean>=0 else 'neg' }}">{{ '%+.4f'|format(f.rankic_mean) }}</td>
+        <td>{{ '%+.2f'|format(f.rankic_ir) }}</td>
+        <td class="{{ 'pos' if f.long_short_annual>=0 else 'neg' }}">{{ '%+.1f'|format(f.long_short_annual*100) }}%</td>
+        <td>{{ '%.0f'|format(f.turnover*100) }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+</div>
+</body>
+</html>
