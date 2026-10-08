@@ -5,36 +5,50 @@
 <title>研究仪表盘</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#0f1420;color:#e5e7eb;padding:24px}
+body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#0f1420;color:#e5e7eb;padding:20px}
 .container{max-width:1180px;margin:0 auto}
-h1{font-size:22px;margin-bottom:4px;color:#fff}
-.sub{color:#94a3b8;font-size:13px;margin-bottom:20px}
-a{color:#60a5fa;text-decoration:none} a:hover{text-decoration:underline}
-.nav{margin-bottom:18px;font-size:13px}
-.era{background:#161d2e;border:1px solid #263143;border-radius:12px;padding:18px 20px;margin-bottom:16px}
-.era h2{font-size:15px;color:#fff;margin-bottom:12px;display:flex;justify-content:space-between}
-.era h2 .bench{color:#f59e0b;font-weight:500;font-size:13px}
+h1{font-size:20px;color:#fff}
+h1 .sub{font-size:12px;color:#64748b;font-weight:400}
+.nav{margin:10px 0 16px;font-size:13px;display:flex;gap:18px;align-items:center}
+.nav a{color:#60a5fa;text-decoration:none}.nav a:hover{text-decoration:underline}
+.intro{background:linear-gradient(135deg,#1a2333,#161d2e);border:1px solid #263143;border-radius:10px;padding:16px 20px;margin-bottom:16px;font-size:13.5px;color:#cbd5e1;line-height:1.8}
+.intro b{color:#93c5fd}
+.era{background:#161d2e;border:1px solid #263143;border-radius:10px;padding:16px 18px;margin-bottom:14px}
+.era h2{font-size:15px;color:#fff;margin-bottom:4px}
+.era .note{font-size:12.5px;color:#94a3b8;margin-bottom:10px;line-height:1.6}
+.era .note b{color:#fbbf24}
+.bench{color:#f59e0b;font-weight:500;font-size:13px;float:right}
 table{width:100%;border-collapse:collapse}
 th{font-size:12px;color:#94a3b8;text-align:right;padding:6px 10px;border-bottom:1px solid #263143}
-td{font-size:13px;padding:8px 10px;text-align:right;border-bottom:1px solid #1d2637}
+td{font-size:13px;padding:7px 10px;text-align:right;border-bottom:1px solid #1d2637}
 th:first-child,td:first-child{text-align:left}
-.pos{color:#34d399}.neg{color:#f87171}
-.tag{display:inline-block;background:#1e293b;color:#93c5fd;border-radius:6px;padding:2px 8px;font-size:11px;margin-right:6px}
+a{color:#60a5fa;text-decoration:none}a:hover{text-decoration:underline}
+.pos{color:#f87171}.neg{color:#34d399}
+.verdict{display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px}
+.v-ok{background:rgba(52,211,153,.15);color:#34d399}
+.v-no{background:rgba(248,113,113,.15);color:#f87171}
+.v-info{background:#1e293b;color:#93c5fd}
 </style>
 </head>
 <body>
 <div class="container">
-  <div class="nav"><a href="/">回测记录</a> · <a href="/results">报告文件</a> · <b>研究仪表盘</b></div>
-  <h1>研究仪表盘</h1>
-  <div class="sub">因子组合 · 两段样本 · 指增检验（静态价值+小盘因子，月调仓，真实成本与涨跌停约束）</div>
+  <div class="nav"><a href="/pms">组合管理</a><a href="/strategy">策略回测</a><a href="/results">每日交易报告</a><b>研究仪表盘</b></div>
+  <h1>研究仪表盘 <span class="sub">全部实验证据库——生产策略为什么长这样</span></h1>
+
+  <div class="intro">
+    这个页面记录了策略研发中<b>所有实验的结果</b>，包括最终采用的方案和被否决的方案。
+    它回答一个问题：<b>为什么生产策略是现在这个样子，而不是别的？</b><br>
+    阅读方式：✔<b style="color:#34d399">绿色标签</b>=验证通过进入生产 · ✘<b style="color:#f87171">红色标签</b>=被否决（点击行可看净值曲线详情）
+  </div>
 
   {% for era in eras %}
   <div class="era">
-    <h2>{{ era.label }}
-      {% if era.benchmark_return is not none %}
-        <span class="bench">基准 {{ '%+.1f'|format(era.benchmark_return*100) }}%</span>
-      {% endif %}
+    {% set verdict = 'v-no' if ('否决' in era.note or '指增' in era.label) else ('v-info' if '分解' in era.note or '消融' in era.note else 'v-ok') %}
+    {% set vtext = '✘ 被否决' if '否决' in era.note else ('ⓘ 收益分解' if '分解' in era.note else ('ⓘ 因子消融' if '消融' in era.note else '✔ 验证通过')) %}
+    <h2>{{ era.label }}<span class="verdict {{ verdict }}">{{ vtext }}</span>
+      {% if era.benchmark_return is not none %}<span class="bench">基准 {{ '%+.1f'|format(era.benchmark_return*100) }}%</span>{% endif %}
     </h2>
+    {% if era.note %}<div class="note">{{ era.note }}</div>{% endif %}
     <table>
       <tr><th>组合</th><th>总收益</th><th>年化</th><th>夏普</th><th>回撤</th><th>换手/次</th><th>成本</th></tr>
       {% for variant, m in era.cols.items() %}
@@ -54,7 +68,8 @@ th:first-child,td:first-child{text-align:left}
 
   {% if factors %}
   <div class="era">
-    <h2>因子评价（BP@60日前瞻）</h2>
+    <h2>因子评价（BP@60日前瞻）<span class="verdict v-info">ⓘ 因子层证据</span></h2>
+    <div class="note">因子层面的预测力检验——IC 为正且 IR 稳定，说明"便宜的房子长期跑赢"这类规律在此因子上成立</div>
     <table>
       <tr><th>样本段</th><th>RankIC</th><th>IR</th><th>多空年化</th><th>换手/期</th></tr>
       {% for f in factors %}

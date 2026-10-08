@@ -48,6 +48,22 @@ def _load_all():
     return items
 
 
+# 实验组的人话解释（为什么做这个实验、结论是什么）
+ERA_NOTES = {
+    'oos_2017_2021': '核心验证：策略在从未见过的 2017-2021 数据上的表现——跑赢等权对照 50pp，证明选股能力真实',
+    'fullmarket_2022_2026': '核心验证：策略在研究期 2022-2026 的表现——跑赢等权对照 63pp',
+    'enhanced_2017_2021': '被否决：限定在沪深300成分内做指增——蓝筹年代跑输基准，成分域限制破坏了多因子互补',
+    'enhanced_2022_2026': '被否决：指增形态在小盘年代大幅跑赢但两段 IR 翻转（-0.56/+0.34），不稳定',
+    'phaseB_oos_2017_2021': '收益分解：β对冲后残差为负——该年代的正收益全部来自大盘β，选股残差 -31pp',
+    'phaseB_fullmarket_2022_2026': '收益分解：对冲后残差 +25pp——小盘年代的选股残差为正',
+    'phaseB中性': '市场中性形态检验（等权/优化器 × 对冲）',
+    'ablation_oos_2017_2021': '因子贡献消融：单因子皆弱（bp单用最差），合成才有效——多因子互补去噪是alpha来源',
+    'ablation_fullmarket_2022_2026': '因子贡献消融（同左，2022-2026 段）',
+    'composite_v2': '被否决：中性化ROE因子进组合后两段均稀释',
+    'composite_v5': '4因子基线 vs 5因子（+低杠杆）：低杠杆两段均小幅改善，进入生产',
+    'process': '回测过程明细（供策略页回放）',
+}
+
 @bp.route('/')
 def index():
     items = _load_all()
@@ -65,6 +81,7 @@ def index():
             variant = m['_file'].split(f'portfolio_{prefix}_')[-1]
             cols[variant] = m
         eras.append({'prefix': prefix, 'label': label, 'cols': cols,
+                     'note': ERA_NOTES.get(prefix, ''),
                      'benchmark_return': members[0].get('benchmark_return')})
 
     return render_template('dashboard_index.html', eras=eras, factors=factors)
