@@ -131,6 +131,11 @@ def serve_kline(symbol):
 
 if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
+    if not debug:
+        from waitress import serve
+        print('waitress serving on http://0.0.0.0:5000 (PMS: /pms)')
+        serve(app, host='0.0.0.0', port=5000, threads=8)
+        raise SystemExit(0)
     print("=" * 60)
     print("Quantitative Trading System - Web Server")
     print("=" * 60)
