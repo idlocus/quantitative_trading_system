@@ -12,7 +12,7 @@ from flask import Blueprint, render_template, jsonify
 
 bp = Blueprint('strategy', __name__, url_prefix='/strategy')
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         'results', 'data')
 
 ERAS = [
@@ -32,7 +32,7 @@ def _load(pattern):
 @bp.route('/api/process/<era>')
 def api_process(era):
     """回测过程明细（按年代一次拉取，前端本地回放）"""
-    d = _load(f'portfolio_process_{era}_5因子生产.json')
+    d = _load(f'portfolio_process_{era}_5因子生*.json')
     if not d:
         return jsonify({'error': '过程工件不存在（先运行 experiments 重跑）'}), 404
     return jsonify({
