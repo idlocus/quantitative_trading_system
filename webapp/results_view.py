@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""研究结果浏览器 Blueprint：列出并渲染 results/ 下的 Markdown/HTML 报告"""
+"""研究结果浏览器 Blueprint：每日交易报告（主）+ 研究档案（次）"""
 
 import os
 import re
@@ -11,10 +11,10 @@ import markdown
 
 bp = Blueprint('results', __name__, url_prefix='/results')
 
-RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
-JOURNAL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'journal')
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RESULTS_DIR = os.path.join(ROOT, 'results')
+JOURNAL_DIR = os.path.join(ROOT, 'journal')
 
-# 文件名前缀 → 分类标签
 CATEGORIES = [
     ('daily_scan', '每日选股'),
     ('factor_screen', '因子批量筛选'),
@@ -33,7 +33,7 @@ def _category(filename: str) -> str:
     for prefix, label in CATEGORIES:
         if filename.startswith(prefix):
             return label
-    return '其他'
+    return '研究档案'
 
 
 def _mtime(path) -> str:
@@ -43,31 +43,58 @@ def _mtime(path) -> str:
         return '-'
 
 
+def _journal_summary(path) -> dict:
+    """从交易日志 md 提取摘要：净值/累计盈亏/成交笔数/持仓数"""
+    out = {'nav': None, 'total_pnl': None, 'trades': 0, 'positions': 0, 'mkt': ''}
+    try:
+        text = open(path, encoding='utf-8').read()
+        m = re.search(r'账户净值 \*\*([\d,\.]+)\*\*（累计投入约 [\d,\.]+，累计盈亏 ([\+\-][\d,]+)）', text)
+        if m:
+            out['nav'] = m.group(1)
+            out['total_pnl'] = m.group(2)
+        # 成交行：| 成交 | 代码 | 买入/卖出 |（表格行含"买入"或"卖出"）
+        out['trades'] = len(re.findall(r'\| (?:买入|卖出) \|', text))
+        # 持仓数：持仓表行 "| 代码 |" 以6位数字开头的行
+        out['positions'] = len(re.findall(r'\| \d{6}\.', text))
+        m2 = re.search(r'沪深300 (?:昨收|今日) ([\+\-][\d\.]+%)', text)
+        if m2:
+            out['mkt'] = m2.group(1)
+    except Exception:
+        pass
+    return out
+
+
+def _journal_dates() -> list:
+    """已有日志的日期列表（升序）"""
+    if not os.path.isdir(JOURNAL_DIR):
+        return []
+    return sorted(f[:-3] for f in os.listdir(JOURNAL_DIR)
+                  if re.fullmatch(r'\d{4}-\d{2}-\d{2}\.md', f))
+
+
 @bp.route('/')
 def index():
-    """研究结果列表页（含每日交易日志）"""
-    items = []
-    for base_dir, default_cat in ((RESULTS_DIR, None), (JOURNAL_DIR, '每日交易日志')):
-        if not os.path.isdir(base_dir):
-            continue
-        for fn in sorted(os.listdir(base_dir), reverse=True):
-            path = os.path.join(base_dir, fn)
-            if not os.path.isfile(path) or fn.startswith('.'):
+    """每日交易报告（主）+ 研究档案（次）"""
+    journals = []
+    for d in reversed(_journal_dates()):  # 最新在前
+        path = os.path.join(JOURNAL_DIR, f'{d}.md')
+        journals.append({'date': d, **_journal_summary(path),
+                         'weekday': datetime.strptime(d, '%Y-%m-%d').strftime('%A')})
+
+    reports = []
+    if os.path.isdir(RESULTS_DIR):
+        for fn in sorted(os.listdir(RESULTS_DIR), reverse=True):
+            path = os.path.join(RESULTS_DIR, fn)
+            if not os.path.isfile(path) or fn.startswith('.') or not fn.endswith(('.md', '.html')):
                 continue
-            if fn.endswith(('.md', '.html')):
-                items.append({
-                    'name': fn,
-                    'category': default_cat or _category(fn),
-                    'mtime': _mtime(path),
-                    'is_html': fn.endswith('.html'),
-                    'size_kb': os.path.getsize(path) // 1024,
-                })
-    return render_template('results_index.html', items=items)
+            reports.append({'name': fn, 'category': _category(fn), 'mtime': _mtime(path),
+                            'is_html': fn.endswith('.html'), 'size_kb': os.path.getsize(path) // 1024})
+    return render_template('results_index.html', journals=journals, reports=reports)
 
 
 @bp.route('/view/<path:name>')
 def view(name):
-    """渲染 Markdown 或直接返回 HTML 报告（results 与 journal 目录）"""
+    """渲染 Markdown 或直接返回 HTML；交易日志附前后日导航"""
     if '/' in name or '..' in name:
         abort(404)
     for base_dir in (RESULTS_DIR, JOURNAL_DIR):
@@ -78,17 +105,25 @@ def view(name):
         abort(404)
 
     if name.endswith('.html'):
-        return send_from_directory(RESULTS_DIR, name)
+        return send_from_directory(base_dir, name)
 
     with open(path, encoding='utf-8') as f:
         text = f.read()
-    # 表格前补空行（python-markdown 要求表格块与上文之间有空行）
-    lines, out = text.splitlines(), []
-    for i, ln in enumerate(lines):
+
+    # 交易日志：前后日导航
+    nav = None
+    m = re.fullmatch(r'(\d{4}-\d{2}-\d{2})\.md', name)
+    if m and base_dir == JOURNAL_DIR:
+        dates = _journal_dates()
+        i = dates.index(m.group(1))
+        nav = {'prev': dates[i - 1] if i > 0 else None,
+               'next': dates[i + 1] if i < len(dates) - 1 else None}
+
+    lines = text.splitlines()
+    out = []
+    for ln in lines:
         if ln.lstrip().startswith('|') and out and out[-1].strip() and not out[-1].lstrip().startswith('|'):
             out.append('')
         out.append(ln)
-    text = '\n'.join(out)
-    # 表格扩展渲染 to_markdown 生成的管道表
-    html = markdown.markdown(text, extensions=['tables', 'fenced_code'])
-    return render_template('results_view.html', name=name, content=html)
+    html = markdown.markdown('\n'.join(out), extensions=['tables', 'fenced_code'])
+    return render_template('results_view.html', name=name, content=html, nav=nav)

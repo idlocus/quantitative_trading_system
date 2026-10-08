@@ -3,49 +3,80 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>研究结果</title>
+<title>每日交易报告</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f6f8; padding: 24px; }
 .container { max-width: 980px; margin: 0 auto; }
 h1 { font-size: 22px; color: #1a1a2e; margin-bottom: 6px; }
 .sub { color: #6b7280; font-size: 13px; margin-bottom: 18px; }
-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.nav { margin-bottom: 14px; font-size: 13px; }
+.nav a { color: #2563eb; text-decoration: none; margin-right: 14px; }
+.nav a:hover { text-decoration: underline; }
+.section-title { font-size: 16px; color: #1f2937; margin: 20px 0 10px; border-left: 4px solid #2563eb; padding-left: 10px; }
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 8px; }
 th { background: #1f2937; color: #fff; font-size: 12px; text-align: left; padding: 10px 14px; }
+th.r, td.r { text-align: right; }
 td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #f0f0f2; color: #374151; }
 tr:hover td { background: #f9fafb; }
 a { color: #2563eb; text-decoration: none; }
 a:hover { text-decoration: underline; }
+.pos { color: #dc2626; } .neg { color: #16a34a; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #e0e7ff; color: #3730a3; }
-.home { margin-bottom: 14px; font-size: 13px; }
+.muted { color: #9ca3af; font-size: 12px; }
+details summary { cursor: pointer; font-size: 14px; color: #374151; padding: 8px 0; }
+.empty { color: #9ca3af; text-align: center; padding: 24px; font-size: 13px; background: #fff; border-radius: 8px; }
 </style>
 </head>
 <body>
 <div class="container">
-  <div class="home"><a href="/">← 回测记录</a></div>
-  <h1>研究结果</h1>
-  <div class="sub">因子评价 · 组合回测 · 样本外验证 · 每日选股（共 {{ items|length }} 份）</div>
+  <div class="nav"><a href="/pms">组合管理</a><a href="/strategy">策略回测</a><b>每日交易报告</b><a href="/research">研究仪表盘</a></div>
+  <h1>每日交易报告</h1>
+  <div class="sub">基于每日交易日志自动汇总（每个交易日一份：盘前展望 / 决策依据 / 成交 / 持仓归因 / 收盘点评）</div>
+
+  <div class="section-title">交易日历</div>
+  {% if journals %}
   <table>
-    <thead><tr><th>分类</th><th>报告</th><th>修改时间</th><th>大小</th></tr></thead>
+    <thead><tr><th>日期</th><th class="r">账户净值</th><th class="r">累计盈亏</th><th class="r">当日成交</th><th class="r">持仓明细行</th><th class="r">市场(300)</th><th></th></tr></thead>
     <tbody>
-    {% for it in items %}
+    {% for j in journals %}
       <tr>
-        <td><span class="badge">{{ it.category }}</span></td>
-        <td>
-          {% if it.is_html %}
-            <a href="/results/view/{{ it.name }}" target="_blank">{{ it.name }}</a> <small style="color:#9ca3af">(交互图表)</small>
-          {% else %}
-            <a href="/results/view/{{ it.name }}">{{ it.name }}</a>
-          {% endif %}
-        </td>
-        <td>{{ it.mtime }}</td>
-        <td>{{ it.size_kb }} KB</td>
+        <td><a href="/results/view/{{ j.date }}.md"><b>{{ j.date }}</b></a> <span class="muted">{{ j.weekday[:3] }}</span></td>
+        <td class="r">{{ j.nav or '—' }}</td>
+        <td class="r {% if j.total_pnl and j.total_pnl.startswith('+') %}pos{% elif j.total_pnl %}neg{% endif %}">{{ j.total_pnl or '—' }}</td>
+        <td class="r">{{ j.trades }} 笔</td>
+        <td class="r">{{ j.positions }}</td>
+        <td class="r">{{ j.mkt or '—' }}</td>
+        <td class="r"><a href="/results/view/{{ j.date }}.md">查看报告 →</a></td>
       </tr>
-    {% else %}
-      <tr><td colspan="4">暂无报告（运行 run_factor_eval / run_portfolio_backtest 等生成）</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  {% else %}
+  <div class="empty">暂无交易日志（Paper 跟跑每个交易日自动生成：python main.py daily）</div>
+  {% endif %}
+
+  <details>
+    <summary>📁 研究档案（{{ reports|length }} 份历史报告）</summary>
+    <table>
+      <thead><tr><th>分类</th><th>报告</th><th>修改时间</th><th class="r">大小</th></tr></thead>
+      <tbody>
+      {% for it in reports %}
+        <tr>
+          <td><span class="badge">{{ it.category }}</span></td>
+          <td>
+            {% if it.is_html %}<a href="/results/view/{{ it.name }}" target="_blank">{{ it.name }}</a>
+            {% else %}<a href="/results/view/{{ it.name }}">{{ it.name }}</a>{% endif %}
+          </td>
+          <td>{{ it.mtime }}</td>
+          <td class="r">{{ it.size_kb }} KB</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">暂无研究档案</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </details>
 </div>
 </body>
 </html>

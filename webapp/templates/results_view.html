@@ -21,7 +21,15 @@ code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 13p
 </head>
 <body>
 <div class="container">
-  <div class="back"><a href="/results">← 返回结果列表</a></div>
+  <div class="back jnav">
+      {% if nav %}
+        {% if nav.prev %}<a href="/results/view/{{ nav.prev }}.md">← 前一日（{{ nav.prev }}）</a>{% endif %}
+        <a href="/results">日历</a>
+        {% if nav.next %}<a href="/results/view/{{ nav.next }}.md">后一日（{{ nav.next }}）→</a>{% endif %}
+      {% else %}
+        <a href="/results">← 返回列表</a>
+      {% endif %}
+    </div>
   {{ content | safe }}
 </div>
 </body>
