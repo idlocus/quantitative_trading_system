@@ -16,6 +16,14 @@ from .pms import bp as pms_bp
 from .strategy import bp as strategy_bp
 
 app = Flask(__name__)
+
+
+@app.after_request
+def no_cache_html(response):
+    """HTML/模板页面不缓存，避免改版后浏览器用旧页面"""
+    if 'text/html' in response.headers.get('Content-Type', ''):
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return response
 db = BacktestDB(os.path.join(os.path.dirname(__file__), 'backtest.db'))
 app.register_blueprint(results_bp)
 app.register_blueprint(dashboard_bp)
