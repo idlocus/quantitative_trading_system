@@ -5,7 +5,7 @@
 验收标准（Phase B 教训）：中性化残差 IC 在两个年代同号且 |IR|>0.10
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import date
 import pandas as pd
 

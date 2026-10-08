@@ -55,6 +55,10 @@ class PortfolioResult:
     benchmark_return: Optional[float]
     equity_curve: pd.Series = None
     holdings_history: List[Dict] = field(default_factory=list)
+    # 回测过程明细（供过程回放）
+    daily_holdings: Dict = field(default_factory=dict)   # {date: [[sym, weight], ...]}
+    daily_contrib: Dict = field(default_factory=dict)    # {date: [[sym, 贡献], ...]}
+    trade_log: List = field(default_factory=list)        # [date, sym, side, price, qty]
 
     def summary_markdown(self) -> str:
         lines = ["## 组合回测结果\n"]
@@ -143,6 +147,7 @@ class PortfolioBacktester:
         cfg = self.config
         dates = self.close_mx.index
         dates = dates[(dates >= score_mx.index.min()) & (dates <= score_mx.index.max())]
+        process_holdings, process_contrib, trade_log = {}, {}, []
 
         cash = cfg.initial_capital
         holdings: Dict[str, float] = {}      # symbol -> 市值（按成本记权重，逐日随价格漂移）
@@ -223,6 +228,7 @@ class PortfolioBacktester:
                         cost = value * (cfg.commission + cfg.stamp_tax + cfg.transfer_fee)
                         cash += value - cost
                         total_cost += cost
+                        trade_log.append([str(t)[:10], s, 'SELL', round(px, 3), int(shares[s])])
                         del shares[s]
 
                 # 买入：新目标与加仓
@@ -236,6 +242,7 @@ class PortfolioBacktester:
                     px = prices[s] * (1 + cfg.slippage)
                     cost = buy_value * (cfg.commission + cfg.transfer_fee)
                     qty = (buy_value - cost) / px
+                    trade_log.append([str(t)[:10], s, 'BUY', round(px, 3), int(qty)])
                     shares[s] = shares.get(s, 0.0) + qty
                     cash -= buy_value
                     total_cost += cost
@@ -246,12 +253,23 @@ class PortfolioBacktester:
                     'symbols': sorted(shares.keys())[:10],
                 })
 
-            # 3. 逐日权益
-            pos_value = sum(
-                shares[s] * prices[s] for s in shares
-                if not pd.isna(prices.get(s, np.nan))
-            )
-            equity_curve[t] = cash + pos_value
+            # 3. 逐日权益 + 过程记录
+            pos_value = 0.0
+            day_hold, day_contrib = [], []
+            prev_close = self.close_mx.shift(1).loc[t]
+            for s2, q2 in shares.items():
+                p2 = prices.get(s2, np.nan)
+                if pd.isna(p2):
+                    continue
+                pos_value += q2 * p2
+                day_hold.append([s2, round(q2 * p2, 0)])
+                pp2 = prev_close.get(s2, np.nan)
+                if not pd.isna(pp2) and pp2 > 0:
+                    day_contrib.append([s2, round(q2 * (p2 - pp2), 0)])
+            eq_total = cash + pos_value
+            process_holdings[str(t)[:10]] = sorted(day_hold, key=lambda x: -x[1])
+            process_contrib[str(t)[:10]] = day_contrib
+            equity_curve[t] = eq_total
 
         # ---- 绩效 ----
         equity = pd.Series(equity_curve).sort_index()
@@ -285,6 +303,9 @@ class PortfolioBacktester:
             benchmark_return=benchmark_return,
             equity_curve=equity,
             holdings_history=holdings_history,
+            daily_holdings=process_holdings,
+            daily_contrib=process_contrib,
+            trade_log=trade_log,
         )
 
     def _select(self, scores: pd.Series, exclude: set,

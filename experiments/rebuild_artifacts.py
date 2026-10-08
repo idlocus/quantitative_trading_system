@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """重建关键实验并保存结构化工件（供研究仪表盘渲染）——全部走本地缓存/DB，零配额"""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import date
 import numpy as np

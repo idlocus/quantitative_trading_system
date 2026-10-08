@@ -8,7 +8,7 @@ import glob
 import json
 import os
 
-from flask import Blueprint, render_template
+from flask import Blueprint, render_template, jsonify
 
 bp = Blueprint('strategy', __name__, url_prefix='/strategy')
 
@@ -27,6 +27,22 @@ def _load(pattern):
         return None
     with open(files[0], encoding='utf-8') as f:
         return json.load(f)
+
+
+@bp.route('/api/process/<era>')
+def api_process(era):
+    """回测过程明细（按年代一次拉取，前端本地回放）"""
+    d = _load(f'portfolio_process_{era}_5因子生产.json')
+    if not d:
+        return jsonify({'error': '过程工件不存在（先运行 experiments 重跑）'}), 404
+    return jsonify({
+        'dates': d['equity']['dates'],
+        'equity': d['equity']['values'],
+        'benchmark': (d.get('benchmark_series') or {}).get('values'),
+        'daily_holdings': d.get('daily_holdings', {}),
+        'daily_contrib': d.get('daily_contrib', {}),
+        'trade_log': d.get('trade_log', []),
+    })
 
 
 @bp.route('/')

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """五因子消融(-leverage)：4因子基线 vs +低杠杆因子，两年代（验收通过的因子组合级复检）"""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import date
 import pandas as pd
 

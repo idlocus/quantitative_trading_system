@@ -5,7 +5,7 @@ Phase B：优化器指增重试 + 市场中性模拟
 两年代 × {等权Top100, 优化器加权Top100(风格约束)} × {多头, β对冲中性}
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import date
 import pandas as pd
 

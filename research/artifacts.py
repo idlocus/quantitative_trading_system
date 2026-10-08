@@ -70,6 +70,10 @@ def portfolio_payload(result, label: str = '', extra: dict = None) -> dict:
         'equity': {'dates': [str(d)[:10] for d in eq.index],
                    'values': [round(float(v), 2) for v in eq.values]},
         'yearly': yearly,
+        # 过程明细（回放用）：每日持仓市值、每日个股贡献、成交流水
+        'daily_holdings': getattr(result, 'daily_holdings', {}),
+        'daily_contrib': getattr(result, 'daily_contrib', {}),
+        'trade_log': getattr(result, 'trade_log', []),
     }
     if extra:
         payload.update(extra)

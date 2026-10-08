@@ -5,7 +5,7 @@
 产出 portfolio_ablation_<era>_<factor>.json 工件，仪表盘自动展示
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import date
 import pandas as pd

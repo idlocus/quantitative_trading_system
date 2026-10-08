@@ -63,6 +63,18 @@ td{padding:7px 10px;text-align:right;border-bottom:1px solid #1d2637;color:#cbd5
       {% endif %}
     </table>
     <div class="ychart" id="yr_{{ era.key }}" style="margin-top:12px"></div>
+    <h3 style="margin-top:16px">⏱ 回测过程回放（拖动日期滑块查看任意交易日）</h3>
+    <div style="display:flex;align-items:center;gap:12px;margin:8px 0">
+      <input type="range" id="sl_{{ era.key }}" min="0" max="100" value="100" style="flex:1">
+      <b id="sd_{{ era.key }}" style="color:#f59e0b;min-width:90px"></b>
+    </div>
+    <div id="sum_{{ era.key }}" style="font-size:13px;color:#94a3b8;margin-bottom:10px"></div>
+    <div class="grid2">
+      <div><h3>当日持仓 Top20（市值）</h3><div style="overflow:auto;max-height:260px"><table id="ph_{{ era.key }}"></table></div></div>
+      <div><h3>当日归因 Top/Bottom（个股贡献）</h3><div style="overflow:auto;max-height:260px"><table id="pc_{{ era.key }}"></table></div></div>
+    </div>
+    <h3 style="margin-top:10px">当日成交</h3>
+    <div style="overflow:auto;max-height:200px"><table id="pt_{{ era.key }}"></table></div>
   </div>
   {% endfor %}
 
@@ -118,6 +130,36 @@ eras.forEach(e => {
     series:[{type:'bar',data:Object.values(yd).map(v=>({value:v,
       itemStyle:{color:v>=0?'#ef4444':'#22c55e'}})),barWidth:'45%'}]});
   window.addEventListener('resize',()=>{eq.resize();yr.resize();});
+  // 过程回放
+  fetch('/strategy/api/process/' + e.key).then(r=>r.json()).then(pd=>{
+    if(pd.error){document.getElementById('sd_'+e.key).textContent=pd.error;return;}
+    const sl=document.getElementById('sl_'+e.key), sd=document.getElementById('sd_'+e.key);
+    sl.max=pd.dates.length-1; sl.value=sl.max;
+    const fmt0=v=>Number(v).toLocaleString('zh-CN',{maximumFractionDigits:0});
+    const render=()=>{
+      const i=+sl.value, day=pd.dates[i];
+      sd.textContent=day;
+      const eqv=pd.equity, prev=eqv[i-1]||eqv[0];
+      const dret=prev>0?eqv[i]/prev-1:0;
+      const holds=pd.daily_holdings[day]||[], contrib=(pd.daily_contrib[day]||[]).slice().sort((a,b)=>b[1]-a[1]);
+      const trades=pd.trade_log.filter(t=>t[0]===day);
+      const up=contrib.filter(c=>c[1]>0).length;
+      document.getElementById('sum_'+e.key).innerHTML=
+        '组合净值 <b style="color:#fff">'+fmt0(eqv[i])+'</b> · 当日 <b class="'+(dret>=0?'pos':'neg')+'">'+(dret>=0?'+':'')+(dret*100).toFixed(2)+'%</b>'
+        +' · 持仓 '+holds.length+' 只 · 当日成交 '+trades.length+' 笔 · 上涨贡献 '+up+' / 下跌 '+(contrib.length-up);
+      const totH=holds.reduce((a,x)=>a+x[1],0)||1;
+      document.getElementById('ph_'+e.key).innerHTML='<tr><th class="l">代码</th><th>市值权重</th></tr>'+
+        holds.slice(0,20).map(h=>'<tr><td class="l">'+h[0]+'</td><td>'+(h[1]/totH*100).toFixed(1)+'%</td></tr>').join('');
+      const top=contrib.slice(0,5), bot=contrib.slice(-5).reverse();
+      document.getElementById('pc_'+e.key).innerHTML='<tr><th class="l">代码</th><th>贡献</th></tr>'+
+        top.concat(bot).map(c=>'<tr><td class="l">'+c[0]+'</td><td class="'+(c[1]>=0?'pos':'neg')+'">'+(c[1]>=0?'+':'')+fmt0(c[1])+'</td></tr>').join('');
+      document.getElementById('pt_'+e.key).innerHTML= trades.length?
+        '<tr><th class="l">代码</th><th class="l">方向</th><th>价格</th><th>数量</th></tr>'+
+        trades.map(t=>'<tr><td class="l">'+t[1]+'</td><td class="l"><span style="color:'+(t[2]==='BUY'?'#f87171':'#34d399')+'">'+(t[2]==='BUY'?'买入':'卖出')+'</span></td><td>'+t[3]+'</td><td>'+fmt0(t[4])+'</td></tr>').join('')
+        : '<tr><td style="color:#64748b">当日无交易（非调仓日）</td></tr>';
+    };
+    sl.oninput=render; render();
+  });
 });
 </script>
 </body>
