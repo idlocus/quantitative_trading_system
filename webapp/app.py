@@ -21,6 +21,24 @@ app.register_blueprint(dashboard_bp)
 app.register_blueprint(pms_bp)
 
 
+def _prewarm_rationale():
+    """后台预热：当日全市场因子矩阵进缓存，用户首次点击个股逻辑即秒回"""
+    import threading
+    def _warm():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+            from data.layered import LayeredDataSource
+            from webapp.rationale import _load_matrices
+            _load_matrices(LayeredDataSource(), __import__('datetime').date.today())
+        except Exception as e:
+            print(f'[prewarm] skip: {e}')
+    threading.Thread(target=_warm, daemon=True).start()
+
+
+_prewarm_rationale()
+
+
 @app.route('/')
 def index():
     """首页 → PMS（组合管理）"""
