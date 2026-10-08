@@ -49,8 +49,8 @@ def api_process(era):
 def index():
     eras = []
     for key, label, _ in ERAS:
-        strat = _load(f'portfolio_composite_v5_{key}_5因子生产.json') \
-            or _load(f'portfolio_composite_v4_{key}_5因子生产.json')
+        strat = _load(f'portfolio_composite_v5_{key}_5因子生*.json') \
+            or _load(f'portfolio_composite_v4_{key}_5因子生*.json')
         equal = _load(f'portfolio_ablation_{key}_等权.json')
         if not strat:
             continue
