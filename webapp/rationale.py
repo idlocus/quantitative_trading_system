@@ -26,6 +26,14 @@ def _load_matrices(ds, day: date):
     key = str(day)
     if key in _MATS_CACHE:
         return _MATS_CACHE[key]
+    with _LOAD_LOCK:  # 并发请求只允许一次加载，其余等待复用
+        if key in _MATS_CACHE:
+            return _MATS_CACHE[key]
+        _MATS_CACHE[key] = _load_matrices_uncached(ds, day)
+        return _MATS_CACHE[key]
+
+
+def _load_matrices_uncached(ds, day):
     prov, pit = _providers(ds)
     start = day - timedelta(days=30)
     pool = _pool(ds, day)
@@ -47,6 +55,7 @@ def _load_matrices(ds, day: date):
 _POOL_CACHE = {}
 _PROVIDERS = {}
 _MATS_CACHE = {}
+_LOAD_LOCK = __import__('threading').Lock()
 
 
 def _providers(ds):
