@@ -36,6 +36,9 @@ def _latest_prices(symbols):
             df = pd.read_parquet(path)
             if df.empty:
                 continue
+            df = df.dropna(subset=['volume', 'close'])  # 剔除残缺快照行
+            if df.empty:
+                continue
             prices[sym] = float(df['close'].iloc[-1])
             if len(df) > 1:
                 prev[sym] = float(df['close'].iloc[-2])
@@ -207,14 +210,19 @@ def api_data():
 
     prices, prev_prices = _latest_prices(list(positions.keys()))
 
-    # 持仓明细（含当日归因）
+    # 持仓明细（含当日归因）；今日建仓的持仓以入场价为基准（昨收波动不属于我们）
+    today_str = str(date.today())
+    last_buy_date = {t['symbol']: t['date'] for t in trades if t['side'] == 'BUY'}
     total_mv = sum(q * prices.get(s, 0.0) for s, q in positions.items())
     rows = []
     day_pnl = 0.0
     for s, q in positions.items():
         cost = ledger.get('cost', {}).get(s, 0.0)
         px = prices.get(s, 0.0)
-        pp = prev_prices.get(s, px)
+        if last_buy_date.get(s) == today_str and cost > 0:
+            pp = cost  # 今日买入：从入场价起算（≈滑点成本）
+        else:
+            pp = prev_prices.get(s, px)
         day_chg = (px / pp - 1) if pp > 0 else 0.0
         contrib = q * (px - pp)
         day_pnl += contrib
