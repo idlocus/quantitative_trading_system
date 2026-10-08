@@ -45,7 +45,6 @@ class SubStrategy:
 
     def select(self, date, allowed_symbols=None, constraint=None) -> List[ScoredStock]:
         """执行子策略选股"""
-        from data.base import DataLoader
         if hasattr(self.data_source, 'get_tradable_symbols'):
             symbols = self.data_source.get_tradable_symbols(date)
         else:

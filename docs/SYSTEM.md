@@ -18,70 +18,34 @@
 ## 2. 目录结构
 
 ```
-quantitative_trading_system/
-├── .env                    # 环境变量配置
-├── run_backtest.py         # 回测入口脚本（--rolling 支持滚动窗口）
-├── run_scan.py             # 每日选股扫描入口
-├── run_factor_eval.py      # 因子评价入口（IC/分层/换手率）
-├── trading.db              # SQLite 数据库
+quant-project/
+├── .env / .env.example     # 环境变量（Oracle凭据等，.env不入库）
+├── run_live.py             # 实盘驱动（Paper/QMT，每日信号→订单→账本）
+├── run_scan.py             # 每日选股扫描
+├── run_backtest.py         # 逐股策略回测（--rolling 滚动窗口）
+├── run_factor_eval.py      # 因子评价（--source wind/akshare）
+├── run_fundamental_eval.py # 基本面因子评价
+├── run_portfolio_backtest.py # 因子组合回测（--fundamental/--band）
+├── run_portfolio_walkforward.py # 组合滚动样本外验证
 │
-├── config/
-│   └── system_config.py    # 系统配置（唯一配置入口）
-│
-├── research/               # 研究基础设施
-│   └── factor_eval.py      # 因子评价（IC/RankIC/分层回测/换手率）
-│
-├── data/                   # 数据接口
-│   ├── __init__.py
-│   ├── base/                # 抽象层（Protocol 接口 + DataLoader）
-│   │   ├── __init__.py
-│   │   ├── interfaces.py    # IKlineProvider, IQuoteProvider,
-│   │   │                    #   ISymbolProvider, IIndustryProvider
-│   │   └── data_loader.py  # CachedDataSource + DataLoader 工厂
-│   ├── wind.py             # Wind 数据接口
-│   ├── akshare.py          # AKShare 数据接口
-│   └── wind_db.py          # Wind Oracle DB 数据源（统一四接口）
-│
-├── indicators/             # 技术指标库
-│   ├── __init__.py
-│   ├── base.py             # 指标注册表（无 ABC）
-│   ├── utils.py           # 工具函数（detect_cross, validate_ohlcv）
-│   ├── registry.py          # 指标注册表
-│   ├── trend_indicators.py  # 趋势指标 (SMA, EMA, MACD, DMI)
-│   ├── momentum_indicators.py # 动量指标 (RSI, Stochastic, CCI)
-│   ├── volatility_indicators.py # 波动率指标 (ATR, BollingerBands)
-│   ├── volume_indicators.py # 成交量指标 (OBV, MFI, VWAP)
-│   └── pattern_indicators.py # 形态指标（支撑/阻力/斐波那契）
-│
-├── selection/              # 选股模块
-│   ├── __init__.py
-│   ├── config.py           # 选股策略配置
-│   ├── scanner.py          # 多指标扫描器
-│   └── strategies.yml      # 策略配置文件
-│
-├── strategy/               # 策略框架
-│   ├── __init__.py
-│   └── momentum.py         # 动量选股策略
-│
-├── backtesting/            # 回测引擎
-│   ├── __init__.py
-│   ├── engine.py           # 核心回测逻辑
-│   ├── runner.py           # 回测运行器（流程编排）
-│   ├── reporter.py         # 回测报告生成
-│   └── templates/          # HTML 报告模板
-│       └── report.html     # 回测HTML报告模板
-│
-├── risk/                   # 风险管理
-│   ├── __init__.py
-│   ├── constants.py        # 风险参数常量（止损/止盈/仓位权重）
-│   └── manager.py          # 仓位计算、止损止盈
-│
-├── webapp/                 # Web 可视化
-│   ├── app.py              # Flask 应用
-│   ├── database.py         # 数据库访问层
-│   └── templates/         # HTML 模板
-│
-└── results/                # 回测报告输出目录
+├── config/                 # 系统配置
+├── data/                   # 三层数据源（layered: 缓存→DB→客户端）
+│   ├── fundamentals.py     # 日频估值字段矩阵
+│   ├── fundamental_pit.py  # 公告日PIT财务因子
+│   └── consensus_pit.py    # 一致预期PIT因子
+├── indicators/             # 技术指标库（注册表）
+├── selection/ strategy/    # 规则选股与策略（历史保留）
+├── research/               # 因子评价/风险模型/过拟合防御/工件
+├── portfolio/              # 组合回测/优化器/对冲
+├── risk/                   # 风控常量与仓位
+├── market_env/ sector/     # 市场环境评分/板块（历史保留）
+├── live/                   # 实盘模块（broker/ledger/signals）
+├── webapp/                 # 研究仪表盘与报告浏览器
+├── experiments/            # 可复现实验脚本（消融/筛选/对冲）
+├── tests/                  # 115项单元测试
+├── docs/                   # SYSTEM/STAGE_REPORT/PROGRESS_LOG
+├── results/                # 报告与结构化工件（运行产物）
+└── data_cache/             # 本地parquet缓存（可再生，不入库）
 ```
 
 ---

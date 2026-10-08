@@ -26,3 +26,4 @@ ai-created/
 .pytest_cache/
 *.db
 .env
+data_cache/
