@@ -65,9 +65,15 @@ function renderDailyK(sym) {
         data: k.volume.map((v, i) => ({ value: v,
           itemStyle: { color: (k.ohlc[i] && k.ohlc[i][1] >= k.ohlc[i][0]) ? '#ef4444' : '#22c55e', opacity: 0.7 } })) }]
   });
-  SYM_CHART.off('dblclick');
-  SYM_CHART.on('dblclick', e => {
-    if (e.seriesType === 'candlestick' && k.dates[e.dataIndex]) showIntraday(sym, k.dates[e.dataIndex]);
+  // 双击K线区域任意位置 → 最近交易日的分时（不要求精确点中蜡烛体）
+  SYM_CHART.getZr().off('dblclick');
+  SYM_CHART.getZr().on('dblclick', e => {
+    const pt = [e.offsetX, e.offsetY];
+    try {
+      if (!SYM_CHART.containPixel({ seriesIndex: 0 }, pt)) return;
+      const idx = Math.round(SYM_CHART.convertFromPixel({ seriesIndex: 0 }, pt)[0]);
+      if (idx >= 0 && idx < k.dates.length) showIntraday(sym, k.dates[idx]);
+    } catch (err) { /* 转换失败忽略 */ }
   });
 }
 
@@ -76,7 +82,11 @@ async function showIntraday(sym, day) {
   document.getElementById('kInfo').innerHTML = '<span style="color:#38bdf8;cursor:pointer" onclick="renderDailyK(\'' + sym + '\')">← 返回日K</span>　<b style="color:#fff">' + sym + ' ' + day + '</b>';
   const r = await fetch('/pms/api/intraday/' + sym + '/' + day);
   const d = await r.json();
-  if (d.error) { document.getElementById('kInfo').innerHTML += '　<span style="color:#f87171">' + d.error + '</span>'; return; }
+  if (d.error) {
+    document.getElementById('symTitle').textContent = sym + ' · ' + d.error;
+    document.getElementById('kInfo').innerHTML += '　<span style="color:#f87171">' + d.error + '</span>';
+    return;
+  }
   const pc = d.prev_close;
   SYM_CHART.clear();
   const lo = Math.min.apply(null, d.price.concat(pc != null ? [pc] : [Infinity]));
