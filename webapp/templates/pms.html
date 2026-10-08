@@ -92,7 +92,7 @@ tr:hover td{background:#1a2333}
         style="background:#1e293b;color:#94a3b8;border:none;border-radius:6px;padding:6px 14px;cursor:pointer">关闭 ✕</button>
     </div>
     <div id="kInfo" style="font-size:12px;color:#94a3b8;margin-bottom:6px"></div>
-    <div id="kChart" style="width:100%;height:420px"></div>
+    <div style="width:100%"><div id="kChart" style="width:100%;min-width:680px;height:420px"></div></div>
     <div id="symRationale" class="card" style="display:none;background:#111827;border:1px solid #263143;border-radius:10px;padding:14px;margin-top:14px"></div>
     <div style="margin-top:14px">
       <h4 style="color:#cbd5e1;font-size:13px;margin-bottom:8px">该股交易记录</h4>
@@ -200,6 +200,6 @@ function renderAttr(){
 load();
 setInterval(load, 60000);  // 每分钟自动刷新
 </script>
-<script src="/static/pms_symbol.js?v=3"></script>
+<script src="/static/pms_symbol.js?v=4"></script>
 </body>
 </html>

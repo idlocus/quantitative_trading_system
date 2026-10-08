@@ -12,6 +12,7 @@ async function showSymbol(sym) {
   renderDailyK(sym);
   SYM_LOGIC = '';
   renderSymTrades(d.trades);
+  requestAnimationFrame(() => requestAnimationFrame(() => renderDailyK(sym)));  // 等弹窗布局完成再画图
   // 推荐逻辑卡片（异步加载，不阻塞K线）
     '<th>价格</th><th>数量</th><th>佣金</th><th>税费</th><th class="l">交易逻辑</th></tr>' +
     (d.trades.map(t => '<tr><td class="l">' + (t.time || t.date).replace('T', ' ') + '</td>' +
@@ -109,6 +110,7 @@ function renderDailyK(sym) {
           itemStyle: { color: (k.ohlc[i] && k.ohlc[i][1] >= k.ohlc[i][0]) ? '#ef4444' : '#22c55e', opacity: 0.7 } })) }]
   });
   // 双击K线区域任意位置 → 最近交易日的分时（不要求精确点中蜡烛体）
+  SYM_CHART.resize();
   SYM_CHART.getZr().off('dblclick');
   SYM_CHART.getZr().on('dblclick', e => {
     const pt = [e.offsetX, e.offsetY];
@@ -156,4 +158,5 @@ async function showIntraday(sym, day) {
         data: d.volume.map((v, i) => ({ value: v,
           itemStyle: { color: (pc == null || d.price[i] >= pc) ? '#ef4444' : '#22c55e', opacity: 0.7 } })) }]
   });
+  SYM_CHART.resize();
 }
