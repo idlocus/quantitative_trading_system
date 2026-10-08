@@ -48,7 +48,6 @@ def _load_matrices_uncached(ds, day):
     roe = pit.get_factor_matrix('roe', pool, start, day)
     if not roe.empty:
         m['roe'] = roe
-    _MATS_CACHE[key] = m
     return m
 
 

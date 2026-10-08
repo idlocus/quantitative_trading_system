@@ -22,21 +22,20 @@ app.register_blueprint(pms_bp)
 
 
 def _prewarm_rationale():
-    """后台预热：当日全市场因子矩阵进缓存，用户首次点击个股逻辑即秒回"""
-    import threading
-    def _warm():
-        try:
-            from dotenv import load_dotenv
-            load_dotenv()
-            from data.layered import LayeredDataSource
-            from webapp.rationale import _load_matrices
-            _load_matrices(LayeredDataSource(), __import__('datetime').date.today())
-        except Exception as e:
-            print(f'[prewarm] skip: {e}')
-    threading.Thread(target=_warm, daemon=True).start()
+    """同步预热：启动时加载当日因子矩阵（约40秒），之后推荐逻辑秒回。
 
-
-_prewarm_rationale()
+    注意：曾尝试后台线程预热，但线程结束时会导致 waitress 主循环退出
+    （Windows 下 asyncore+线程交互问题），故改为启动时同步执行。
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from data.layered import LayeredDataSource
+        from webapp.rationale import _load_matrices
+        _load_matrices(LayeredDataSource(), __import__('datetime').date.today())
+        print('[prewarm] done')
+    except Exception as e:
+        print(f'[prewarm] skip: {e}')
 
 
 @app.route('/')
@@ -133,6 +132,9 @@ if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
     if not debug:
         from waitress import serve
+        if os.getenv('QUANT_PREWARM', '1') != '0':
+            print('[startup] 预热因子矩阵中（约40秒），期间不对外服务…')
+            _prewarm_rationale()
         print('waitress serving on http://0.0.0.0:5000 (PMS: /pms)')
         serve(app, host='0.0.0.0', port=5000, threads=8)
         raise SystemExit(0)
