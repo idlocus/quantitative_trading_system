@@ -153,8 +153,14 @@ def api_symbol(symbol):
             'qty': ledger.get('positions', {}).get(symbol, 0),
             'cost': ledger.get('cost', {}).get(symbol, 0),
         },
-        'rationale': _rationale(symbol, df),
     })
+
+
+@bp.route('/api/rationale/<symbol>')
+def api_rationale(symbol):
+    """推荐逻辑（独立异步端点：全市场矩阵计算较慢，不阻塞K线渲染）"""
+    r = _rationale(symbol, None)
+    return jsonify(r if r else {})
 
 
 def _rationale(symbol, kline_df):

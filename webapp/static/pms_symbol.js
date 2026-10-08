@@ -9,8 +9,25 @@ async function showSymbol(sym) {
   if (d.error) { document.getElementById('symTitle').textContent = sym + ' · ' + d.error; return; }
   SYM_DATA = d;
   renderDailyK(sym);
-  // 推荐逻辑卡片
-  const ra = d.rationale;
+  renderDailyK(sym);
+  document.getElementById('symTrades').innerHTML = '<tr><th class="l">时间</th><th class="l">方向</th>' +
+    '<th>价格</th><th>数量</th><th>佣金</th><th>税费</th><th class="l">交易逻辑</th></tr>' +
+    (d.trades.map(t => '<tr><td class="l">' + (t.time || t.date).replace('T', ' ') + '</td>' +
+      '<td class="l"><span class="badge" style="color:' + (t.side === 'BUY' ? '#f87171' : '#34d399') + '">' +
+      (t.side === 'BUY' ? '买入' : '卖出') + '</span></td>' +
+      '<td>' + t.price.toFixed(2) + '</td><td>' + fmt(t.quantity) + '</td>' +
+      '<td>' + t.commission.toFixed(2) + '</td><td>' + t.taxes.toFixed(2) + '</td>' +
+      '<td class="l" style="color:#94a3b8">' + (t.note || '建仓买入（5因子Top30入选）') + '</td></tr>').join('') ||
+      '<tr><td class="empty">无交易记录</td></tr>');
+  // 推荐逻辑卡片（异步加载，不阻塞K线）
+  const raBox = document.getElementById('symRationale');
+  raBox.style.display = 'block';
+  raBox.innerHTML = '<span style="color:#64748b;font-size:13px">推荐逻辑计算中…（首次约30-40秒）</span>';
+  fetch('/pms/api/rationale/' + sym).then(rr => rr.json()).then(ra => { fillRationale(ra); })
+    .catch(() => { raBox.style.display = 'none'; });
+}
+
+function fillRationale(ra) {
   const raBox = document.getElementById('symRationale');
   if (ra && ra.points && ra.points.length) {
     let html = '<h4 style="color:#cbd5e1;font-size:13px;margin:0 0 8px">推荐逻辑（' + ra.day + ' 买入口径）'
@@ -25,16 +42,7 @@ async function showSymbol(sym) {
     html += '</ul></details>';
     raBox.innerHTML = html;
     raBox.style.display = 'block';
-  } else { raBox.style.display = 'none'; }
-  document.getElementById('symTrades').innerHTML = '<tr><th class="l">时间</th><th class="l">方向</th>' +
-    '<th>价格</th><th>数量</th><th>佣金</th><th>税费</th><th class="l">交易逻辑</th></tr>' +
-    (d.trades.map(t => '<tr><td class="l">' + (t.time || t.date).replace('T', ' ') + '</td>' +
-      '<td class="l"><span class="badge" style="color:' + (t.side === 'BUY' ? '#f87171' : '#34d399') + '">' +
-      (t.side === 'BUY' ? '买入' : '卖出') + '</span></td>' +
-      '<td>' + t.price.toFixed(2) + '</td><td>' + fmt(t.quantity) + '</td>' +
-      '<td>' + t.commission.toFixed(2) + '</td><td>' + t.taxes.toFixed(2) + '</td>' +
-      '<td class="l" style="color:#94a3b8">' + (t.note || '建仓买入（5因子Top30入选）') + '</td></tr>').join('') ||
-      '<tr><td class="empty">无交易记录</td></tr>');
+  } else { raBox.innerHTML = '<span style="color:#64748b;font-size:13px">暂无推荐逻辑数据</span>'; }
 }
 
 function renderDailyK(sym) {
