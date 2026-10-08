@@ -31,7 +31,11 @@ td{padding:7px 10px;text-align:right;border-bottom:1px solid #1d2637;color:#cbd5
 <body>
 <div id="diagLine" style="font-size:12px;color:#64748b;padding:6px 10px;background:#111827;border-radius:6px;margin-bottom:10px">环境检测中…</div>
 <div class="container">
-  <div class="nav"><a href="/pms">组合管理</a><b>策略回测</b><a href="/results">每日交易报告</a><a href="/research">研究仪表盘</a></div>
+  <h1>策略回测 <span class=sub>数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
+  <div class=nav>
+    <a href=/pms>组合管理</a><b>策略回测</b><a href=/results>每日交易报告</a><a href=/research>研究仪表盘</a>
+    <span class=refresh>刷新于 <script>document.write(new Date().toLocaleTimeString())</script></span>
+  </div>
   <h1>生产策略 · 5因子选股（估值×3 + 规模 + 低杠杆）
     <span class="sub">TopN等权 · 月调仓 · 真实成本（佣金/印花税/滑点）· 涨跌停约束 · PIT全市场含退市股</span></h1>
   <div style="margin:10px 0">

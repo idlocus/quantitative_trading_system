@@ -18,6 +18,22 @@ from .strategy import bp as strategy_bp
 app = Flask(__name__)
 
 
+@app.context_processor
+def inject_header_data():
+    import json, os
+    d = {'as_of': '', 'nav': '', 'positions': '', 'cash': ''}
+    try:
+        lp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'live', 'ledger.json')
+        with open(lp, encoding='utf-8') as f:
+            led = json.load(f)
+        hist = led.get('nav_history', [])
+        d['as_of'] = hist[-1]['date'] if hist else str(__import__('datetime').date.today())
+        d['positions'] = str(len(led.get('positions', {})))
+    except Exception:
+        d['as_of'] = str(__import__('datetime').date.today())
+    return dict(header_data=d)
+
+
 @app.after_request
 def no_cache_html(response):
     """HTML/模板页面不缓存，避免改版后浏览器用旧页面"""
