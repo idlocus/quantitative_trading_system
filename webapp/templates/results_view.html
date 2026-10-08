@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ name }}</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f6f8; padding: 24px; }
+.container { max-width: 900px; margin: 0 auto; background: #fff; border-radius: 10px; padding: 32px 40px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+h1 { font-size: 20px; margin: 18px 0 10px; color: #1a1a2e; }
+h2 { font-size: 16px; margin: 16px 0 8px; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 4px; }
+p { font-size: 14px; color: #374151; line-height: 1.7; margin: 6px 0; }
+table { border-collapse: collapse; margin: 10px 0; width: 100%; }
+th, td { border: 1px solid #e5e7eb; padding: 6px 10px; font-size: 13px; text-align: left; }
+th { background: #f9fafb; }
+blockquote { border-left: 4px solid #f59e0b; background: #fffbeb; padding: 8px 14px; margin: 10px 0; font-size: 13px; color: #78350f; }
+code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+.back { margin-bottom: 16px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="back"><a href="/results">← 返回结果列表</a></div>
+  {{ content | safe }}
+</div>
+</body>
+</html>

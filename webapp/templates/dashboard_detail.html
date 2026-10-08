@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ d._name }}</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#0f1420;color:#e5e7eb;padding:24px}
+.container{max-width:1080px;margin:0 auto}
+h1{font-size:20px;color:#fff;margin-bottom:14px}
+a{color:#60a5fa;font-size:13px;text-decoration:none}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.tile{background:#161d2e;border:1px solid #263143;border-radius:10px;padding:14px}
+.tile .k{font-size:11px;color:#94a3b8;margin-bottom:4px}
+.tile .v{font-size:20px;font-weight:600;color:#fff}
+.pos{color:#34d399!important}.neg{color:#f87171!important}
+.card{background:#161d2e;border:1px solid #263143;border-radius:12px;padding:14px;margin-bottom:16px}
+.card h3{font-size:13px;color:#cbd5e1;margin-bottom:8px}
+#mainChart{width:100%;height:380px}
+#yearChart{width:100%;height:260px}
+#icChart{width:100%;height:340px}
+#qChart{width:100%;height:260px}
+</style>
+</head>
+<body>
+<div class="container">
+  <a href="/research">← 研究仪表盘</a>
+  <h1>{{ d._name }}</h1>
+
+  {% if d._kind == 'portfolio' %}
+  <div class="tiles">
+    <div class="tile"><div class="k">总收益</div><div class="v {{ 'pos' if d.total_return>=0 else 'neg' }}">{{ '%+.1f'|format(d.total_return*100) }}%</div></div>
+    {% if d.benchmark_return is not none %}
+    <div class="tile"><div class="k">基准 {{ d.benchmark_symbol }}</div><div class="v">{{ '%+.1f'|format(d.benchmark_return*100) }}%</div></div>
+    <div class="tile"><div class="k">超额</div><div class="v {{ 'pos' if d.total_return-d.benchmark_return>=0 else 'neg' }}">{{ '%+.1f'|format((d.total_return-d.benchmark_return)*100) }}%</div></div>
+    {% endif %}
+    <div class="tile"><div class="k">年化</div><div class="v">{{ '%+.1f'|format(d.annual_return*100) }}%</div></div>
+    <div class="tile"><div class="k">夏普</div><div class="v">{{ '%.2f'|format(d.sharpe) }}</div></div>
+    <div class="tile"><div class="k">最大回撤</div><div class="v neg">{{ '%.1f'|format(d.max_drawdown*100) }}%</div></div>
+    <div class="tile"><div class="k">平均换手/次</div><div class="v">{{ '%.0f'|format(d.avg_turnover*100) }}%</div></div>
+  </div>
+  <div class="card"><h3>净值曲线（组合 vs 基准）</h3><div id="mainChart"></div></div>
+  <div class="card"><h3>年度收益</h3><div id="yearChart"></div></div>
+
+  <script>
+  const eq = {{ d.equity | tojson }};
+  const mk = echarts.init(document.getElementById('mainChart'));
+  const series = [{name:'组合', type:'line', data:eq.values, showSymbol:false,
+                   lineStyle:{width:2,color:'#60a5fa'}, areaStyle:{opacity:0.06}}];
+  const legend = ['组合'];
+  {% if d.benchmark_series %}
+  const bs = {{ d.benchmark_series | tojson }};
+  series.push({name:'基准', type:'line', data:bs.values, showSymbol:false,
+               lineStyle:{width:1.5,color:'#f59e0b'}});
+  legend.push('基准');
+  {% endif %}
+  mk.setOption({backgroundColor:'transparent',
+    tooltip:{trigger:'axis'},
+    legend:{data:legend, textStyle:{color:'#94a3b8'}},
+    grid:{left:70,right:20,top:30,bottom:50},
+    xAxis:{type:'category', data:eq.dates, axisLabel:{color:'#64748b', interval:60}},
+    yAxis:{type:'value', scale:true, axisLabel:{color:'#64748b'},
+           splitLine:{lineStyle:{color:'#1d2637'}}}});
+  const yk = echarts.init(document.getElementById('yearChart'));
+  const yd = {{ d.yearly | tojson }};
+  yk.setOption({backgroundColor:'transparent',
+    tooltip:{trigger:'axis'},
+    grid:{left:60,right:20,top:20,bottom:30},
+    xAxis:{type:'category', data:Object.keys(yd), axisLabel:{color:'#64748b'}},
+    yAxis:{type:'value', axisLabel:{formatter:p=>(p*100).toFixed(0)+'%', color:'#64748b'},
+           splitLine:{lineStyle:{color:'#1d2637'}}},
+    series:[{type:'bar', data:Object.values(yd),
+             itemStyle:{color:p=>p.value>=0?'#34d399':'#f87171'}}]});
+  window.addEventListener('resize',()=>{mk.resize();yk.resize();});
+  </script>
+
+  {% else %}
+  <div class="tiles">
+    <div class="tile"><div class="k">RankIC 均值</div><div class="v {{ 'pos' if d.rankic_mean>=0 else 'neg' }}">{{ '%+.4f'|format(d.rankic_mean) }}</div></div>
+    <div class="tile"><div class="k">RankIC IR</div><div class="v">{{ '%+.2f'|format(d.rankic_ir) }}</div></div>
+    <div class="tile"><div class="k">多空年化</div><div class="v {{ 'pos' if d.long_short_annual>=0 else 'neg' }}">{{ '%+.1f'|format(d.long_short_annual*100) }}%</div></div>
+    <div class="tile"><div class="k">IC 正向率</div><div class="v">{{ '%.0f'|format(d.ic_positive_rate*100) }}%</div></div>
+    <div class="tile"><div class="k">换手/期</div><div class="v">{{ '%.0f'|format(d.turnover*100) }}%</div></div>
+  </div>
+  <div class="card"><h3>IC 时间序列</h3><div id="icChart"></div></div>
+  <div class="card"><h3>分位数平均期收益（Q1最弱 → Q5最强）</h3><div id="qChart"></div></div>
+
+  <script>
+  const ic = {{ d.ic_series | tojson }};
+  const ck = echarts.init(document.getElementById('icChart'));
+  ck.setOption({backgroundColor:'transparent',
+    tooltip:{trigger:'axis'},
+    grid:{left:60,right:20,top:20,bottom:50},
+    xAxis:{type:'category', data:ic.dates, axisLabel:{color:'#64748b', interval:40}},
+    yAxis:{type:'value', axisLabel:{color:'#64748b'}, splitLine:{lineStyle:{color:'#1d2637'}}},
+    series:[{type:'bar', data:ic.values,
+             itemStyle:{color:p=>p.value>=0?'#34d399':'#f87171'}}],
+    dataZoom:[{type:'inside'}]});
+  const qd = {{ d.quantile_mean_ret | tojson }};
+  const qk = echarts.init(document.getElementById('qChart'));
+  qk.setOption({backgroundColor:'transparent',
+    tooltip:{trigger:'axis'},
+    grid:{left:80,right:20,top:20,bottom:30},
+    xAxis:{type:'category', data:Object.keys(qd).map(k=>'Q'+(Number(k)+1)), axisLabel:{color:'#94a3b8'}},
+    yAxis:{type:'value', axisLabel:{formatter:p=>(p*100).toFixed(1)+'%', color:'#64748b'},
+           splitLine:{lineStyle:{color:'#1d2637'}}},
+    series:[{type:'bar', data:Object.values(qd),
+             itemStyle:{color:p=>p.value>=0?'#34d399':'#f87171'}, barWidth:'50%'}]});
+  window.addEventListener('resize',()=>{ck.resize();qk.resize();});
+  </script>
+  {% endif %}
+</div>
+</body>
+</html>

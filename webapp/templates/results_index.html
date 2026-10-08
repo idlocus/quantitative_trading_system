@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>研究结果</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f6f8; padding: 24px; }
+.container { max-width: 980px; margin: 0 auto; }
+h1 { font-size: 22px; color: #1a1a2e; margin-bottom: 6px; }
+.sub { color: #6b7280; font-size: 13px; margin-bottom: 18px; }
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+th { background: #1f2937; color: #fff; font-size: 12px; text-align: left; padding: 10px 14px; }
+td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #f0f0f2; color: #374151; }
+tr:hover td { background: #f9fafb; }
+a { color: #2563eb; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #e0e7ff; color: #3730a3; }
+.home { margin-bottom: 14px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="home"><a href="/">← 回测记录</a></div>
+  <h1>研究结果</h1>
+  <div class="sub">因子评价 · 组合回测 · 样本外验证 · 每日选股（共 {{ items|length }} 份）</div>
+  <table>
+    <thead><tr><th>分类</th><th>报告</th><th>修改时间</th><th>大小</th></tr></thead>
+    <tbody>
+    {% for it in items %}
+      <tr>
+        <td><span class="badge">{{ it.category }}</span></td>
+        <td>
+          {% if it.is_html %}
+            <a href="/results/view/{{ it.name }}" target="_blank">{{ it.name }}</a> <small style="color:#9ca3af">(交互图表)</small>
+          {% else %}
+            <a href="/results/view/{{ it.name }}">{{ it.name }}</a>
+          {% endif %}
+        </td>
+        <td>{{ it.mtime }}</td>
+        <td>{{ it.size_kb }} KB</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4">暂无报告（运行 run_factor_eval / run_portfolio_backtest 等生成）</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

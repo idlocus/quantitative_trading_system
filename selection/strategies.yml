@@ -1,0 +1,272 @@
+# 选股策略配置
+# 用于 StockScanner 的策略定义
+#
+# 评分说明（连续强度评分）：
+#   通过逻辑门（AND 全部满足 / OR 至少一个）后，
+#   score = 60 + 40 × 加权平均强度，强度反映条件满足程度（勉强通过≈0，远超阈值≈1）
+
+short_term_momentum:
+  name: "短期动量反转"
+  description: "RSI超卖 + MACD金叉 + 短期均线多头"
+  indicators:
+    - name: "rsi"
+      operator: "<"
+      threshold: 40
+      weight: 1.0
+    - name: "macd"
+      operator: "cross_up"
+      threshold: 0
+      weight: 1.0
+    - name: "ema"
+      operator: ">"
+      threshold: 0
+      weight: 1.0
+  logic: "AND"
+  min_score: 60
+  max_positions: 10
+
+breakout:
+  name: "突破策略"
+  description: "布林带上轨突破 + 资金流量放大"
+  indicators:
+    - name: "bb"
+      operator: "break_upper"
+      threshold: 0
+      weight: 1.0
+    - name: "mfi"
+      operator: ">"
+      threshold: 50
+      weight: 1.0
+  logic: "AND"
+  min_score: 60
+  max_positions: 5
+
+momentum_with_sector_filter:
+  name: 动量策略+板块筛选
+  indicators:
+    - name: RSI
+      operator: "<"
+      threshold: 40
+      weight: 1.0
+    - name: MACD
+      operator: "cross_up"
+      threshold: 0
+      weight: 1.0
+  logic: AND
+  min_score: 60
+  max_positions: 5
+
+institutional_accumulation:
+  name: 机构蓄力
+  description: "主力持续买入 + 趋势确认 + RSI回调不破"
+  indicators:
+    - name: dmi
+      operator: "adx_gt"
+      threshold: 25
+      weight: 1.5
+    - name: rsi
+      operator: ">"
+      threshold: 40
+      weight: 1.0
+    - name: rsi
+      operator: "<"
+      threshold: 70
+      weight: 0.8
+    - name: ""
+      operator: "volume_ma_ratio_gt"
+      threshold: 0.5
+      weight: 0.8
+  logic: AND
+  min_score: 60
+  max_positions: 5
+
+retail_hot:
+  name: 游资炒作
+  description: "游资活跃 + 放量 + 短线RSI超卖反弹"
+  indicators:
+    - name: rsi
+      operator: "<"
+      threshold: 40
+      weight: 1.5
+    - name: ""
+      operator: "volume_ma_ratio_gt"
+      threshold: 1.2
+      weight: 1.2
+    - name: rsi
+      operator: ">"
+      threshold: 30
+      weight: 0.8
+  logic: AND
+  min_score: 60
+  max_positions: 3
+  sw_industry_filter: true
+  sw_industry_top_n: 10
+
+trend_following_with_dmi:
+  name: 趋势跟随+DMI确认
+  description: "ADX>25趋势确认 + DMI金叉买入 + RSI不超买"
+  indicators:
+    # DMI: ADX>25 确认趋势
+    - name: dmi
+      operator: ">"
+      threshold: 25
+      weight: 1.5
+    # DMI 金叉: +DI 上穿 -DI
+    - name: dmi
+      operator: "dmi_golden_cross"
+      threshold: 0
+      weight: 1.0
+    - name: RSI
+      operator: "<"
+      threshold: 70
+      weight: 1.0
+  logic: AND
+  min_score: 60
+  max_positions: 5
+
+atr_trend_strategy:
+  name: ATR趋势跟踪
+  description: "MACD金叉 + ATR趋势确认（ADX>25）"
+  indicators:
+    - name: MACD
+      operator: "cross_up"
+      threshold: 0
+      weight: 1.0
+    - name: dmi
+      operator: ">"
+      threshold: 25
+      weight: 1.0
+  logic: AND
+  min_score: 60
+  max_positions: 5
+
+adaptive:
+  name: 自适应策略
+  description: "根据市场环境自动选择最优策略"
+  indicators: []
+  logic: "AND"
+  min_score: 60
+  max_positions: 5
+
+multi_strategy:
+  name: 多策略组合
+  description: "趋势+DMI + 动量 + 突破 多策略并行，加权信号"
+  strategies:
+    - name: trend_following_with_dmi
+      weight: 0.35
+    - name: momentum_with_sector_filter
+      weight: 0.30
+    - name: breakout
+      weight: 0.20
+    - name: short_term_momentum
+      weight: 0.15
+  logic: weighted_sum
+  min_score: 55
+  max_positions: 5
+
+enhanced_momentum:
+  name: 增强动量反转
+  description: "RSI超卖 + MACD金叉 + 趋势确认(ADX>20) + 缩量回踩MA20 + 短期RSI(6)"
+  indicators:
+    # 方案C: RSI(6) 短期更敏感
+    - name: rsi
+      operator: "<"
+      threshold: 30
+      weight: 1.2
+    # 方案B: ADX>20 趋势确认（过滤震荡）
+    - name: dmi
+      operator: "adx_gt"
+      threshold: 20
+      weight: 1.0
+    # MACD金叉
+    - name: macd
+      operator: "cross_up"
+      threshold: 0
+      weight: 1.0
+    # EMA>0 均线多头
+    - name: ema
+      operator: ">"
+      threshold: 0
+      weight: 0.8
+    # 方案D: 成交量放大确认
+    - name: ""
+      operator: "volume_ma_ratio_gt"
+      threshold: 0.5
+      weight: 0.6
+  logic: AND
+  min_score: 65
+  max_positions: 5
+
+oversold_bounce:
+  name: 超跌反弹策略
+  description: "短期RSI(6)极端超卖 + 放量 + ADX确认趋势市场"
+  indicators:
+    # RSI(6) < 30: 极端超卖
+    - name: rsi
+      operator: "<"
+      threshold: 30
+      weight: 1.5
+    # ADX > 20: 有明确趋势（趋势市场中超卖反弹更可靠）
+    - name: dmi
+      operator: "adx_gt"
+      threshold: 20
+      weight: 1.0
+    # MACD > 0: 上升趋势
+    - name: macd
+      operator: ">"
+      threshold: 0
+      weight: 1.0
+    # 成交量放大
+    - name: ""
+      operator: "volume_ma_ratio_gt"
+      threshold: 0.8
+      weight: 0.8
+  logic: AND
+  min_score: 70
+  max_positions: 5
+
+pure_trend_follow:
+  name: 纯趋势跟随
+  description: "MA20多头排列 + ADX>25确认趋势 + 缩量回踩MA20买入"
+  indicators:
+    # 收盘价站稳MA20上方
+    - name: ""
+      operator: "price_above_ma"
+      threshold: 20
+      weight: 1.5
+    # ADX > 25: 趋势强度确认
+    - name: dmi
+      operator: "adx_gt"
+      threshold: 25
+      weight: 1.5
+    # MA5 > MA20: 均线多头排列（趋势确认）
+    - name: ""
+      operator: "ma5_above_ma20"
+      threshold: 0
+      weight: 1.0
+  logic: AND
+  min_score: 60
+  max_positions: 5
+
+trend_rps_follow:
+  name: 趋势动量+相对强度
+  description: "趋势跟随叠加横截面RPS：只买强于全市场70%股票的趋势股（欧奈尔相对强度）"
+  indicators:
+    # 收盘价站稳MA20上方
+    - name: ""
+      operator: "price_above_ma"
+      threshold: 20
+      weight: 1.0
+    # ADX > 22: 有趋势基础
+    - name: dmi
+      operator: "adx_gt"
+      threshold: 22
+      weight: 1.0
+    # 横截面RPS > 70: 20日收益强于全市场70%的股票（引擎注入，离线/数据不足时不满足）
+    - name: ""
+      operator: "rps_rank_gt"
+      threshold: 70
+      weight: 1.5
+  logic: AND
+  min_score: 60
+  max_positions: 5

@@ -1,0 +1,28 @@
+# IDE
+.idea/
+.claude/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+uv.lock
+
+# 运行产物
+logs/
+results/
+ai-created/
+.pytest_cache/
+*.db
+.env
