@@ -264,27 +264,113 @@ class JournalWriter:
             pass
 
         # ── 风格轮动信号 ──
-        try:
-            large = ds.preload_batch(['000300.SH'], prev_trading - timedelta(days=30), prev_trading)
-            small_pool = [s for s in symbols if s in cache][:10]
-            if large.get('000300.SH') is not None and small_pool:
-                large_ret = float(large['000300.SH']['close'].iloc[-1] / large['000300.SH']['close'].iloc[-21] - 1)
-                small_rets = []
-                for s in small_pool:
-                    df = cache.get(s)
-                    if df is not None and len(df) > 21:
-                        small_rets.append(float(df['close'].iloc[-1] / df['close'].iloc[-21] - 1))
-                if small_rets:
-                    small_avg = np.mean(small_rets)
-                    spread = small_avg - large_ret
-                    lines += ["### 风格轮动（近一月）", "",
-                              f"- 沪深300（大盘）：{large_ret:+.1%}",
-                              f"- 持仓组合（偏小盘）：{small_avg:+.1%}",
-                              f"- **大小盘价差**：{spread:+.1%}（{'小盘占优 ✓' if spread > 0 else '大盘占优 ✗ 对组合不利'}）", ""]
-        except Exception:
-            pass
+        lines += self._style_rotation(ds, prev_trading)
+
+        # ── 行业轮动信号 ──
+        lines += self._industry_rotation(ds, prev_trading)
 
         return lines
+
+    # 申万一级行业代码→名称（31个，标准编码，不常变）
+    SW_L1 = {
+        '801010': '农林牧渔', '801030': '化工', '801040': '钢铁',
+        '801050': '有色金属', '801080': '电子', '801110': '家用电器',
+        '801120': '食品饮料', '801130': '纺织服饰', '801140': '轻工制造',
+        '801150': '医药生物', '801160': '公用事业', '801170': '交通运输',
+        '801180': '房地产', '801200': '商贸零售', '801210': '社会服务',
+        '801230': '综合', '801710': '建筑材料', '801720': '建筑装饰',
+        '801730': '电力设备', '801740': '国防军工', '801750': '计算机',
+        '801760': '传媒', '801770': '通信', '801780': '银行',
+        '801790': '非银金融', '801880': '汽车', '801890': '机械设备',
+        '801950': '煤炭', '801960': '石油石化', '801970': '环保',
+        '801980': '美容护理',
+    }
+
+    def _style_rotation(self, ds, prev) -> List[str]:
+        """风格轮动：沪深300 vs 中证500 vs 中证1000（近20日）"""
+        try:
+            indices = {'000300.SH': '沪深300(大盘)', '000905.SH': '中证500(中盘)', '000852.SH': '中证1000(小盘)'}
+            cache = ds.preload_batch(list(indices.keys()), prev - timedelta(days=60), prev)
+            rets = {}
+            for code, name in indices.items():
+                df = cache.get(code)
+                if df is not None and len(df) > 21:
+                    r20 = float(df['close'].iloc[-1] / df['close'].iloc[-21] - 1)
+                    r5 = float(df['close'].iloc[-1] / df['close'].iloc[-6] - 1)
+                    rets[name] = (r20, r5)
+            if not rets:
+                return []
+            lines = ["### 风格轮动信号", "",
+                     "| 风格 | 近5日 | 近20日 | 动量 |", "|------|-------|--------|------|"]
+            for name, (r20, r5) in sorted(rets.items(), key=lambda x: -x[1][0]):
+                momentum = "↑强" if r20 > 0.02 else "↓弱" if r20 < -0.02 else "→平"
+                lines.append(f"| {name} | {r5:+.1%} | {r20:+.1%} | {momentum} |")
+            # 判定
+            big = rets.get('沪深300(大盘)', (0, 0))[0]
+            small = rets.get('中证1000(小盘)', (0, 0))[0]
+            spread = small - big
+            verdict = ("**小盘占优 ✓**（组合偏小盘，顺风）" if spread > 0.01
+                       else "**大盘占优 ✗**（组合偏小盘，逆风）" if spread < -0.01
+                       else "**风格均衡**")
+            lines += ["", f"大小盘20日价差：{spread:+.1%} → {verdict}", ""]
+            return lines
+        except Exception:
+            return []
+
+    def _industry_rotation(self, ds, prev) -> List[str]:
+        """行业轮动：申万一级行业近20日涨跌幅排名"""
+        try:
+            db = ds._db_src()
+            if not db:
+                return []
+            cur = db._cursor()
+            # 直接查硬编码的31个一级行业代码（避免SUBSTR过滤问题）
+            codes = list(self.SW_L1.keys())
+            placeholders = ','.join(f':c{i}' for i in range(len(codes)))
+            binds = {f'c{i}': f'{c}.SI' for i, c in enumerate(codes)}
+            cur.execute(f"""
+                SELECT S_INFO_WINDCODE, TRADE_DT, S_DQ_CLOSE
+                FROM ASWSINDEXEOD
+                WHERE S_INFO_WINDCODE IN ({placeholders})
+                  AND TRADE_DT >= :dt_start
+                ORDER BY S_INFO_WINDCODE, TRADE_DT
+            """, {**binds, 'dt_start': (prev - timedelta(days=60)).strftime('%Y%m%d')})
+            rows = cur.fetchall()
+            cur.close()
+            if not rows:
+                return []
+
+            # 按行业分组，取最新和20日前收盘
+            from collections import defaultdict
+            prices = defaultdict(list)
+            for code, dt, close in rows:
+                prices[code[:6]].append((dt, close))
+
+            data = []
+            for ind_code, name in self.SW_L1.items():
+                pts = prices.get(ind_code, [])
+                if len(pts) >= 21:
+                    latest = pts[-1][1]
+                    ago = pts[-21][1]
+                    if ago and ago > 0:
+                        data.append((name, latest / ago - 1))
+
+            data.sort(key=lambda x: -x[1])
+            top5 = data[:5]
+            bot5 = data[-5:]
+
+            lines = ["### 行业轮动信号（申万一级，近20日）", "",
+                     "**领涨行业**", "", "| 行业 | 涨幅 |", "|------|------|"]
+            for name, ret in top5:
+                lines.append(f"| {name} | {ret:+.1%} |")
+            lines += ["", "**领跌行业**", "", "| 行业 | 跌幅 |", "|------|------|"]
+            for name, ret in bot5:
+                lines.append(f"| {name} | {ret:+.1%} |")
+            lines += ["", f"行业分化度：TOP-BOT价差 **{top5[0][1]-bot5[0][1]:.1%}**"
+                      f"（{'高分化，行业选择重要' if top5[0][1]-bot5[0][1] > 0.15 else '低分化，行业差异不大'}）", ""]
+            return lines
+        except Exception:
+            return []
 
     def _market_outlook(self, ds, prev) -> List[str]:
         """市场展望：基准/池涨跌、宽度、ADX、市场环境分（全部昨收口径）"""
