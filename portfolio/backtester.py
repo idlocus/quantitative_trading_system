@@ -145,6 +145,8 @@ class PortfolioBacktester:
             score_band: 可选 (lo, hi) 选股分数带（规避极端尾部，见 select_portfolio）
         """
         cfg = self.config
+        # 前视偏差修正：将信号 shift(1)，确保调仓日 T 使用 T-1 的因子排名
+        score_mx = score_mx.shift(1)
         dates = self.close_mx.index
         dates = dates[(dates >= score_mx.index.min()) & (dates <= score_mx.index.max())]
         process_holdings, process_contrib, trade_log = {}, {}, []
