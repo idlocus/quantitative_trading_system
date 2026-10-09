@@ -38,6 +38,9 @@ class PortfolioConfig:
     benchmark_symbol: str = '000300.SH'
     limit_tolerance: float = 0.002     # 涨跌停判定容差
     buffer_band: float = 0.0           # 权重缓冲带（0=全量换仓，0.2=与生产一致的20%缓冲）
+    max_participation: float = 0.10    # 单日最大成交量占比（10%=不超过日均量10%）
+    min_daily_turnover: float = 500e4  # 最低日均成交额（500万，流动性过滤）
+    impact_coeff: float = 0.10         # 市场冲击系数（sqrt模型）
 
 
 @dataclass
@@ -86,13 +89,22 @@ class PortfolioBacktester:
     def __init__(self, cache: Dict[str, pd.DataFrame], config: PortfolioConfig):
         self.config = config
         close = {}
+        volume = {}
         for sym, df in cache.items():
             if df is not None and not df.empty:
-                s = pd.to_numeric(df.set_index('date')['close'], errors='coerce')
-                s.index = pd.DatetimeIndex(s.index).as_unit('ns')
-                close[sym] = s
+                idx = pd.DatetimeIndex(pd.to_datetime(df['date'])).as_unit('ns')
+                close[sym] = pd.Series(pd.to_numeric(df['close'], errors='coerce').values, index=idx)
+                if 'volume' in df.columns:
+                    volume[sym] = pd.Series(pd.to_numeric(df['volume'], errors='coerce').values, index=idx)
         self.close_mx = pd.DataFrame(close).sort_index()
         self.prev_close_mx = self.close_mx.shift(1)
+        # 成交量矩阵（用于流动性过滤和冲击成本）
+        self.volume_mx = pd.DataFrame(volume).reindex(self.close_mx.index).sort_index()
+        # 20日均成交额（价格×成交量，用于流动性判定）
+        if not self.volume_mx.empty:
+            self.avg_turnover_20d = (self.close_mx * self.volume_mx).rolling(20).mean()
+        else:
+            self.avg_turnover_20d = pd.DataFrame(index=self.close_mx.index, columns=self.close_mx.columns)
 
     # ---- 涨跌停判定（向量化）----
 
@@ -131,6 +143,44 @@ class PortfolioBacktester:
                 return 0.30
             return 0.10
         return pd.Series({s: ratio(s) for s in symbols})
+
+    def _liquidity_mask(self, date) -> pd.Series:
+        """流动性不足的股票（20日均成交额低于阈值，不可买）"""
+        cfg = self.config
+        if cfg.min_daily_turnover <= 0 or self.avg_turnover_20d.empty:
+            return pd.Series(dtype=bool)
+        try:
+            avg = self.avg_turnover_20d.loc[date]
+            return avg < cfg.min_daily_turnover
+        except KeyError:
+            return pd.Series(dtype=bool)
+
+    def _max_buy_amount(self, sym: str, date) -> float:
+        """单票当日最大可买入金额（受成交量约束）"""
+        cfg = self.config
+        if cfg.max_participation <= 0:
+            return float('inf')
+        try:
+            avg_turn = self.avg_turnover_20d.loc[date, sym]
+            if pd.isna(avg_turn) or avg_turn <= 0:
+                return 0.0
+            return float(avg_turn) * cfg.max_participation
+        except KeyError:
+            return 0.0
+
+    def _market_impact(self, sym: str, date, trade_amount: float) -> float:
+        """市场冲击成本：冲击比例 ∝ sqrt(交易额/日均成交额)"""
+        cfg = self.config
+        if cfg.impact_coeff <= 0 or trade_amount <= 0:
+            return 0.0
+        try:
+            avg_turn = self.avg_turnover_20d.loc[date, sym]
+            if pd.isna(avg_turn) or avg_turn <= 0:
+                return cfg.slippage  # 无数据时退化为固定滑点
+            participation = trade_amount / avg_turn
+            return cfg.slippage + cfg.impact_coeff * np.sqrt(participation)
+        except KeyError:
+            return cfg.slippage
 
     # ---- 主流程 ----
 
@@ -201,8 +251,9 @@ class PortfolioBacktester:
             if idx in rebalance_idx and t in score_mx.index:
                 scores = score_mx.loc[t]
                 up_mask = self._limit_up_mask(t)
-                # 排除当日涨停（不可买）与已无价格数据的股票
-                buyable_excl = set(up_mask[up_mask == True].index)  # noqa: E712
+                liq_mask = self._liquidity_mask(t)
+                # 排除当日涨停（不可买）、流动性不足、已无价格数据的股票
+                buyable_excl = set(up_mask[up_mask == True].index) | set(liq_mask[liq_mask == True].index)  # noqa: E712
                 targets = self._select(scores, buyable_excl, score_band)
                 target_w = weight_func(targets, t)
 
@@ -263,7 +314,14 @@ class PortfolioBacktester:
                     buy_value = min(tv - cur_v, cash)
                     if buy_value <= 0:
                         continue
-                    px = prices[s] * (1 + cfg.slippage)
+                    # 成交量约束：单日买入不超过日均成交额的 max_participation
+                    max_amt = self._max_buy_amount(s, t)
+                    buy_value = min(buy_value, max_amt)
+                    if buy_value <= 0:
+                        continue
+                    # 市场冲击滑点（参与率越高，滑点越大）
+                    impact_slip = self._market_impact(s, t, buy_value)
+                    px = prices[s] * (1 + impact_slip)
                     cost_rate = cfg.commission + cfg.transfer_fee
                     # A股最小交易单位：整手（100股）
                     qty = int((buy_value / (px * (1 + cost_rate))) // 100) * 100
