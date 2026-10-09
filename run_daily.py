@@ -56,7 +56,8 @@ def run_pm(ds, ledger, writer, ctx, execute=None, top_n=30):
     fills = []
     if orders and execute == 'paper':
         broker = PaperBroker()
-        fills = broker.execute(orders, prices, date.today(), prev_prices=prev)
+        fills = broker.execute(orders, prices, date.today(), prev_prices=prev,
+                               available_cash=ledger.cash)
         ledger.apply_fills(fills)
     path = writer.write_pm(ds, fills, ctx)
     print(f"盘后日志已追加: {path}")

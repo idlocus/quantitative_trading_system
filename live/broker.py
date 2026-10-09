@@ -71,11 +71,13 @@ class PaperBroker(Broker):
     def name(self):
         return 'PaperBroker'
 
-    def execute(self, orders, prices, trade_date, prev_prices: Optional[Dict[str, float]] = None):
+    def execute(self, orders, prices, trade_date, prev_prices: Optional[Dict[str, float]] = None,
+                available_cash: Optional[float] = None):
         from datetime import datetime as _dt
         if isinstance(trade_date, date) and not isinstance(trade_date, _dt):
             trade_date = _dt.combine(trade_date, _dt.now().time())  # 记录真实执行时刻
         fills = []
+        running_cash = available_cash  # 运行时现金追踪（None=不检查）
         for o in orders:
             raw = prices.get(o.symbol)
             if raw is None or raw <= 0:
@@ -105,9 +107,29 @@ class PaperBroker(Broker):
             if qty <= 0:
                 fills.append(Fill(o, px, 0, 0, 0, trade_date, status='rejected(不足一手)'))
                 continue
+
+            # 资金约束：检查可用现金（买入时逐笔扣减）
             value = px * qty
+            if o.side == 'BUY' and running_cash is not None:
+                if value > running_cash:
+                    # 资金不足，缩减到可承受的数量
+                    affordable_qty = int(running_cash / (px * 1.005) // 100) * 100
+                    if affordable_qty <= 0:
+                        fills.append(Fill(o, px, 0, 0, 0, trade_date,
+                                         status='rejected(资金不足)'))
+                        continue
+                    qty = affordable_qty
+                    value = px * qty
             commission = value * self.commission
             taxes = value * self.transfer_fee + (value * self.stamp_tax if o.side == 'SELL' else 0)
+
+            # 更新运行时现金
+            if running_cash is not None:
+                if o.side == 'BUY':
+                    running_cash -= value + commission + taxes
+                else:
+                    running_cash += value - commission - taxes
+
             fills.append(Fill(o, px, qty, commission, taxes, trade_date))
         return fills
 

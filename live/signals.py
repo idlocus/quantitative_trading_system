@@ -83,23 +83,27 @@ def build_orders(targets: List[str], current_weights: Dict[str, float],
     target_set = set(targets)
 
     # 卖出：不在目标中 或 超配
+    sell_proceeds_w = 0.0  # 预计卖出回收的权重
     for s, w in current_weights.items():
         if s not in target_set:
             orders.append(Order(s, 'SELL', 0.0, amount=w * total_nav,
                                 note='移出组合'))
+            sell_proceeds_w += w
         elif w > target_w * (1 + band):
             excess = (w - target_w) * total_nav
             orders.append(Order(s, 'SELL', target_w, amount=excess, note='超配回收'))
+            sell_proceeds_w += (w - target_w)
 
-    # 买入：新目标 或 低配
-    cash_weight = 1.0 - sum(current_weights.values())
+    # 买入：新目标 或 低配（逐笔扣减可用资金，防止超卖）
+    remaining_w = 1.0 - sum(current_weights.values()) + sell_proceeds_w * 0.95  # 卖出回收×95%折扣（费用+滑点）
     for s in targets:
         w = current_weights.get(s, 0.0)
         if w < target_w * (1 - band):
-            alloc = min(target_w - w, cash_weight + 0.05)
+            alloc = min(target_w - w, remaining_w)
             if alloc > 0:
                 orders.append(Order(s, 'BUY', target_w, amount=alloc * total_nav,
                                     note='新入/低配'))
+                remaining_w -= alloc  # 逐笔扣减，防止多单合计超现金
     return orders
 
 
