@@ -329,22 +329,21 @@ class JournalWriter:
             placeholders = ','.join(f':c{i}' for i in range(len(codes)))
             binds = {f'c{i}': f'{c}.SI' for i, c in enumerate(codes)}
             cur.execute(f"""
-                SELECT S_INFO_WINDCODE, TRADE_DT, S_DQ_CLOSE
+                SELECT S_INFO_WINDCODE, TRADE_DT, S_DQ_CLOSE, S_VAL_PE, S_DQ_VOLUME
                 FROM ASWSINDEXEOD
                 WHERE S_INFO_WINDCODE IN ({placeholders})
                   AND TRADE_DT >= :dt_start
                 ORDER BY S_INFO_WINDCODE, TRADE_DT
-            """, {**binds, 'dt_start': (prev - timedelta(days=60)).strftime('%Y%m%d')})
+            """, {**binds, 'dt_start': (prev - timedelta(days=90)).strftime('%Y%m%d')})
             rows = cur.fetchall()
             cur.close()
             if not rows:
                 return []
 
-            # 按行业分组，取最新和20日前收盘
             from collections import defaultdict
             prices = defaultdict(list)
-            for code, dt, close in rows:
-                prices[code[:6]].append((dt, close))
+            for code, dt, close, pe, vol in rows:
+                prices[code[:6]].append((dt, close, pe, vol))
 
             data = []
             for ind_code, name in self.SW_L1.items():
@@ -352,25 +351,93 @@ class JournalWriter:
                 if len(pts) >= 21:
                     latest = pts[-1][1]
                     ago = pts[-21][1]
-                    if ago and ago > 0:
-                        data.append((name, latest / ago - 1))
+                    if not ago or ago <= 0:
+                        continue
+                    ret = latest / ago - 1
+                    pe_chg = None
+                    if pts[-1][2] and pts[-21][2] and pts[-21][2] > 0:
+                        pe_chg = pts[-1][2] / pts[-21][2] - 1
+                    vol_ratio = None
+                    vols = [p[3] for p in pts if p[3]]
+                    if len(vols) >= 25:
+                        vol_ratio = (sum(vols[-5:]) / 5) / (sum(vols) / len(vols)) if sum(vols) > 0 else None
+                    data.append((name, ret, pe_chg, vol_ratio))
 
             data.sort(key=lambda x: -x[1])
             top5 = data[:5]
             bot5 = data[-5:]
 
-            lines = ["### 行业轮动信号（申万一级，近20日）", "",
-                     "**领涨行业**", "", "| 行业 | 涨幅 |", "|------|------|"]
-            for name, ret in top5:
-                lines.append(f"| {name} | {ret:+.1%} |")
-            lines += ["", "**领跌行业**", "", "| 行业 | 跌幅 |", "|------|------|"]
-            for name, ret in bot5:
-                lines.append(f"| {name} | {ret:+.1%} |")
-            lines += ["", f"行业分化度：TOP-BOT价差 **{top5[0][1]-bot5[0][1]:.1%}**"
-                      f"（{'高分化，行业选择重要' if top5[0][1]-bot5[0][1] > 0.15 else '低分化，行业差异不大'}）", ""]
+            def _driver(ret, pe_c):
+                if pe_c is None: return "—"
+                eps = (1 + ret) / (1 + pe_c) - 1
+                if ret > 0 and pe_c > 0.02: return "估值扩张（情绪驱动）"
+                if ret > 0 and pe_c < -0.02: return f"盈利改善(EPS{eps:+.0%})"
+                if ret < 0 and pe_c < -0.02: return "估值收缩（避险抛售）"
+                if ret < 0 and pe_c > 0.02: return f"盈利恶化(EPS{eps:+.0%})"
+                return "波动不大"
+            def _vol(vr):
+                if vr is None: return "—"
+                if vr > 1.5: return f"**{vr:.1f}x放量**"
+                if vr < 0.7: return f"{vr:.1f}x缩量"
+                return f"{vr:.1f}x"
+
+            lines = ["### 行业轮动信号（申万一级，近20日）", ""]
+            lines += ["**领涨行业**", "",
+                      "| 行业 | 涨幅 | PE变化 | 量能 | 归因 |", "|------|------|--------|------|------|"]
+            for item in top5:
+                name, ret, pe_c, vol_r = item[0], item[1], item[2] if len(item) > 2 else None, item[3] if len(item) > 3 else None
+                pe_s = f"{pe_c:+.0%}" if pe_c is not None else "—"
+                lines.append(f"| {name} | {ret:+.1%} | {pe_s} | {_vol(vol_r)} | {_driver(ret, pe_c)} |")
+            lines += ["", "**领跌行业**", "",
+                      "| 行业 | 跌幅 | PE变化 | 量能 | 归因 |", "|------|------|--------|------|------|"]
+            for item in bot5:
+                name, ret, pe_c, vol_r = item[0], item[1], item[2] if len(item) > 2 else None, item[3] if len(item) > 3 else None
+                pe_s = f"{pe_c:+.0%}" if pe_c is not None else "—"
+                lines.append(f"| {name} | {ret:+.1%} | {pe_s} | {_vol(vol_r)} | {_driver(ret, pe_c)} |")
+            lines += ["", f"行业分化度：TOP-BOT价差 **{top5[0][1]-bot5[0][1]:.1%}**", ""]
+            lines += self._rotation_narrative(top5, bot5)
             return lines
-        except Exception:
+        except Exception as e:
+            logger.debug(f"industry_rotation failed: {e}")
             return []
+
+    def _rotation_narrative(self, top5, bot5) -> List[str]:
+        """轮动叙事：把量化信号翻译成市场解读"""
+        lines = ["**📊 轮动解读**", ""]
+        top_names = [t[0] for t in top5]
+        bot_names = [b[0] for b in bot5]
+        top_pes = [t[2] for t in top5 if len(t) > 2 and t[2] is not None]
+        bot_pes = [b[2] for b in bot5 if len(b) > 2 and b[2] is not None]
+
+        if top_pes and sum(1 for d in top_pes if d > 0.02) >= 3:
+            lines.append(f"- 领涨行业（{'、'.join(top_names[:3])}）主要由**估值扩张**驱动——市场给予更高风险溢价，可能是政策预期或情绪修复")
+        elif top_pes and sum(1 for d in top_pes if d < -0.02) >= 3:
+            lines.append(f"- 领涨行业（{'、'.join(top_names[:3])}）主要由**盈利改善**驱动——基本面在好转，上涨更有持续性")
+        else:
+            lines.append(f"- 领涨行业（{'、'.join(top_names[:3])}）驱动因素混合")
+
+        if bot_pes and sum(1 for d in bot_pes if d < -0.02) >= 3:
+            lines.append(f"- 领跌行业（{'、'.join(bot_names[:3])}）主要是**估值收缩**——市场降低风险偏好，避险/减仓行为")
+        elif bot_pes and sum(1 for d in bot_pes if d > 0.02) >= 3:
+            lines.append(f"- 领跌行业（{'、'.join(bot_names[:3])}）主要是**盈利恶化**——基本面在变差")
+        else:
+            lines.append(f"- 领跌行业（{'、'.join(bot_names[:3])}）跌幅中估值和盈利因素混合")
+
+        defensive = {'银行','房地产','交通运输','公用事业','医药生物','食品饮料'}
+        cyclical = {'有色金属','电子','计算机','机械设备','国防军工','电力设备','煤炭','石油石化'}
+        td = sum(1 for n in top_names if n in defensive)
+        tc = sum(1 for n in top_names if n in cyclical)
+        bd = sum(1 for n in bot_names if n in defensive)
+        bc = sum(1 for n in bot_names if n in cyclical)
+
+        if td >= 2 and bc >= 2:
+            lines.append(f"- **市场风格：防守型轮动**——资金从周期成长流向防守（银行/地产/交运），风险偏好下降，对小盘成长策略不利")
+        elif tc >= 2 and bd >= 2:
+            lines.append(f"- **市场风格：进攻型轮动**——资金从防守流向周期成长，风险偏好上升，对小盘成长策略有利")
+        else:
+            lines.append(f"- **市场风格：无明显防守/进攻偏向**")
+        lines.append("")
+        return lines
 
     def _market_outlook(self, ds, prev) -> List[str]:
         """市场展望：基准/池涨跌、宽度、ADX、市场环境分（全部昨收口径）"""
