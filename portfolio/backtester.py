@@ -59,6 +59,10 @@ class PortfolioResult:
     total_cost: float                  # 累计交易成本（含税费滑点）
     benchmark_return: Optional[float]
     equity_curve: pd.Series = None
+    # 统一基准组：多基准对比（消除"超额收益"口径歧义）
+    benchmark_suite: Dict[str, Optional[float]] = field(default_factory=dict)
+    # {name: 区间收益}，如 {'沪深300': 0.12, '中证500': 0.08, '等权对照': 0.15}
+    benchmark_curves: Dict[str, pd.Series] = field(default_factory=dict)
     holdings_history: List[Dict] = field(default_factory=list)
     # 回测过程明细（供过程回放）
     daily_holdings: Dict = field(default_factory=dict)   # {date: [[sym, weight], ...]}
@@ -73,9 +77,8 @@ class PortfolioResult:
         lines.append(f"| 指标 | 值 |")
         lines.append("|------|------|")
         lines.append(f"| 总收益 | {self.total_return:+.2%} |")
-        if self.benchmark_return is not None:
-            lines.append(f"| 基准（{self.config.benchmark_symbol}） | {self.benchmark_return:+.2%} |")
-            lines.append(f"| 超额收益 | {self.total_return - self.benchmark_return:+.2%} |")
+        for bname, bret in self.benchmark_suite.items():
+            lines.append(f"| 基准：{bname} | {bret:+.2%} | 超额 {self.total_return - bret:+.2%} |")
         lines.append(f"| 年化收益 | {self.annual_return:+.2%} |")
         lines.append(f"| 夏普 | {self.sharpe:.2f} |")
         lines.append(f"| 最大回撤 | {self.max_drawdown:.2%} |")
@@ -385,6 +388,25 @@ class PortfolioBacktester:
             if len(bench) >= 2 and bench.iloc[0] > 0:
                 benchmark_return = float(bench.iloc[-1] / bench.iloc[0] - 1)
 
+        # 统一基准组：沪深300 + 中证500 + 中证1000 + 同池等权
+        benchmark_suite = {}
+        benchmark_curves = {}
+        bench_idx = {'沪深300': '000300.SH', '中证500': '000905.SH', '中证1000': '000852.SH'}
+        for name, code in bench_idx.items():
+            if code in self.close_mx.columns:
+                bench = self.close_mx[code].loc[dates[0]:dates[-1]].dropna()
+                if len(bench) >= 2 and bench.iloc[0] > 0:
+                    benchmark_suite[name] = float(bench.iloc[-1] / bench.iloc[0] - 1)
+                    benchmark_curves[name] = bench / bench.iloc[0]
+        # 同池等权（无成本的等权基准，衡量选股alpha）
+        pool_cols = [c for c in self.close_mx.columns if c not in bench_idx.values()]
+        if pool_cols:
+            pool_ret = self.close_mx[pool_cols].loc[dates[0]:dates[-1]].pct_change().mean(axis=1)
+            ew_curve = (1 + pool_ret.fillna(0)).cumprod()
+            if len(ew_curve) >= 2:
+                benchmark_suite['等权对照'] = float(ew_curve.iloc[-1] - 1)
+                benchmark_curves['等权对照'] = ew_curve
+
         return PortfolioResult(
             config=cfg,
             n_dates=n_days,
@@ -398,6 +420,8 @@ class PortfolioBacktester:
             avg_turnover=float(np.mean(turnover_list)) if turnover_list else 0.0,
             total_cost=float(total_cost),
             benchmark_return=benchmark_return,
+            benchmark_suite=benchmark_suite,
+            benchmark_curves=benchmark_curves,
             equity_curve=equity,
             holdings_history=holdings_history,
             daily_holdings=process_holdings,

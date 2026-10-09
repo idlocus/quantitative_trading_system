@@ -84,6 +84,7 @@ def portfolio_payload(result, label: str = '', extra: dict = None) -> dict:
         'avg_turnover': result.avg_turnover,
         'total_cost_pct': result.total_cost / result.initial_capital,
         'benchmark_return': result.benchmark_return,
+        'benchmark_suite': getattr(result, 'benchmark_suite', {}),
         'benchmark_symbol': result.config.benchmark_symbol,
         'equity': {'dates': [str(d)[:10] for d in eq.index],
                    'values': [round(float(v), 2) for v in eq.values]},
