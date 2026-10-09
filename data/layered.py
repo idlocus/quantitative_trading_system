@@ -9,7 +9,8 @@
   ③ DB 仍缺（如最新未同步日）才走 WindPy 客户端（消耗配额，只取差额）
   取回后写回本地缓存，并记录三层用量统计。
 
-一致性约定：K线统一不复权价（DB 用 S_DQ_OPEN/CLOSE 原始列，与 WindPy 默认一致）；
+一致性约定：K线统一使用前复权价（DB 用 S_DQ_ADJ* 列，AKShare 用 qfq），
+消除除权除息导致的价格跳空（影响动量/止损/估值计算）。
 基本面估值字段（PE/PB/PS/总市值）DB 列直接映射，股息率无 DB 列走客户端。
 """
 
@@ -35,8 +36,8 @@ DB_FIELD_MAP = {
 CLIENT_ONLY_FIELDS = {'dividendyield2'}
 
 KLINE_FIELDS = ['open', 'high', 'low', 'close', 'volume']
-_DB_KLINE_COLS = {'open': 'S_DQ_OPEN', 'high': 'S_DQ_HIGH', 'low': 'S_DQ_LOW',
-                  'close': 'S_DQ_CLOSE', 'volume': 'S_DQ_VOLUME'}
+_DB_KLINE_COLS = {'open': 'S_DQ_ADJOPEN', 'high': 'S_DQ_ADJHIGH', 'low': 'S_DQ_ADJLOW',
+                  'close': 'S_DQ_ADJCLOSE', 'volume': 'S_DQ_VOLUME'}
 
 
 class LayeredDataSource:
@@ -231,8 +232,8 @@ class LayeredDataSource:
                 binds = {f"s{j}": s for j, s in enumerate(chunk)}
                 sql = f"""
                     SELECT S_INFO_WINDCODE AS sym, TRADE_DT AS dt,
-                           CAST(S_DQ_OPEN AS FLOAT), CAST(S_DQ_HIGH AS FLOAT),
-                           CAST(S_DQ_LOW AS FLOAT), CAST(S_DQ_CLOSE AS FLOAT),
+                           CAST(S_DQ_ADJOPEN AS FLOAT), CAST(S_DQ_ADJHIGH AS FLOAT),
+                           CAST(S_DQ_ADJLOW AS FLOAT), CAST(S_DQ_ADJCLOSE AS FLOAT),
                            CAST(S_DQ_VOLUME AS FLOAT)
                     FROM AShareEODPrices
                     WHERE S_INFO_WINDCODE IN ({placeholders})
@@ -261,8 +262,8 @@ class LayeredDataSource:
                 binds = {f"s{j}": s for j, s in enumerate(chunk)}
                 sql = f"""
                     SELECT S_INFO_WINDCODE AS sym, TRADE_DT AS dt,
-                           CAST(S_DQ_OPEN AS FLOAT), CAST(S_DQ_HIGH AS FLOAT),
-                           CAST(S_DQ_LOW AS FLOAT), CAST(S_DQ_CLOSE AS FLOAT),
+                           CAST(S_DQ_ADJOPEN AS FLOAT), CAST(S_DQ_ADJHIGH AS FLOAT),
+                           CAST(S_DQ_ADJLOW AS FLOAT), CAST(S_DQ_ADJCLOSE AS FLOAT),
                            CAST(S_DQ_VOLUME AS FLOAT)
                     FROM AIndexEODPrices
                     WHERE S_INFO_WINDCODE IN ({placeholders})
