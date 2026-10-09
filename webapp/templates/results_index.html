@@ -29,9 +29,9 @@ details summary { cursor: pointer; font-size: 14px; color: #cbd5e1; }
 </head>
 <body>
 <div class="container">
+  <h1>PMS · 每日交易报告 <span class="sub">数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
   <div class="nav"><a href="/pms">组合管理</a><a href="/strategy">策略回测</a><b>每日交易报告</b><a href="/research">研究仪表盘</a>
     <span style="color:#64748b;font-size:12px;margin-left:12px">刷新于 <script>document.write(new Date().toLocaleTimeString())</script></span></div>
-  <h1>PMS · 每日交易报告 <span class="sub">数据截至 {{ header_data.as_of }} 收盘（缓存价）</span></h1>
   <div style="color:#64748b;font-size:12px;margin:4px 0">每个交易日一份：盘前展望 / 决策依据 / 成交 / 持仓归因 / 收盘点评</div>
 
   <div class="card">
