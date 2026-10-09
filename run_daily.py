@@ -69,7 +69,7 @@ def main():
     parser = argparse.ArgumentParser(description='Daily trading journal')
     parser.add_argument('--phase', choices=['am', 'pm', 'full'], default='full')
     parser.add_argument('--execute', choices=['paper', 'qmt'], default=None)
-    parser.add_argument('--top', type=int, default=30)
+    parser.add_argument('--top', type=int, default=100)
     parser.add_argument('--ledger', default=LEDGER_PATH)
     args = parser.parse_args()
 

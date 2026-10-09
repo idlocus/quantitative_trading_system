@@ -27,7 +27,7 @@ JOURNAL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 class JournalWriter:
     """每日交易日志生成器（am 追加式写入，pm 补齐）"""
 
-    def __init__(self, ledger, top_n: int = 30):
+    def __init__(self, ledger, top_n: int = 100):
         self.ledger = ledger
         self.top_n = top_n
         os.makedirs(JOURNAL_DIR, exist_ok=True)

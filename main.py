@@ -7,7 +7,7 @@
     python main.py daily                # ★ 每日完整流程（数据→信号→Paper成交→账本→日志→净值）
     python main.py am / pm              # 分阶段（早盘/收盘后）
     python main.py status               # 账户与持仓概览
-    python main.py scan [--top 10]      # 每日选股扫描
+    python main.py scan [--top 100]      # 每日选股扫描
     python main.py dashboard [--port 5000]  # 研究仪表盘（常驻）
     python main.py report               # 重建研究仪表盘工件
 
@@ -91,13 +91,13 @@ def main():
     sub = parser.add_subparsers(dest='cmd')
 
     p = sub.add_parser('daily', help='每日完整流程（推荐注册计划任务）')
-    p.add_argument('--top', type=int, default=30)
+    p.add_argument('--top', type=int, default=100)
     p.add_argument('--execute', choices=['paper', 'qmt'], default=None)
     p.set_defaults(func=cmd_daily)
 
     for name, help_ in (('am', '仅盘前（展望+决策）'), ('pm', '仅盘后（成交+归因+点评）')):
         p = sub.add_parser(name, help=help_)
-        p.add_argument('--top', type=int, default=30)
+        p.add_argument('--top', type=int, default=100)
         p.add_argument('--execute', choices=['paper', 'qmt'], default='paper')
         p.set_defaults(func=lambda a, n=name: _run('run_daily.py', '--phase', n,
                                                    '--execute', a.execute,

@@ -48,7 +48,7 @@ def main():
     parser.add_argument('--init', type=float, default=None, help='初始入金')
     parser.add_argument('--signal', action='store_true', help='生成目标持仓与指令')
     parser.add_argument('--execute', choices=['paper', 'qmt'], default=None)
-    parser.add_argument('--top', type=int, default=30)
+    parser.add_argument('--top', type=int, default=100)
     parser.add_argument('--nav', action='store_true')
     parser.add_argument('--status', action='store_true')
     parser.add_argument('--ledger', default=LEDGER_PATH)

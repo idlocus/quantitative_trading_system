@@ -37,6 +37,7 @@ class PortfolioConfig:
     weight_method: str = 'equal'       # equal | inverse_vol
     benchmark_symbol: str = '000300.SH'
     limit_tolerance: float = 0.002     # 涨跌停判定容差
+    buffer_band: float = 0.0           # 权重缓冲带（0=全量换仓，0.2=与生产一致的20%缓冲）
 
 
 @dataclass
@@ -218,10 +219,21 @@ class PortfolioBacktester:
                 ) / denom / 2
                 turnover_list.append(turnover)
 
-                # 卖出：目标中不存在或需减仓的
+                # 卖出：目标中不存在或需减仓的（缓冲带内不调）
                 down_mask = self._limit_down_mask(t)
+                target_w_each = 1.0 / max(len(target_value), 1) if target_value else 0
                 for s in list(shares.keys()):
-                    if s not in target_value or target_value[s] < cur_value.get(s, 0.0) * 0.999:
+                    cur_w = cur_value.get(s, 0.0) / denom if denom > 0 else 0
+                    if s not in target_value:
+                        # 不在目标 → 卖出
+                        need_sell = True
+                    elif cfg.buffer_band > 0 and cur_w > 0:
+                        # 在目标但检查是否超配（超过缓冲带上限不调）
+                        tw = target_value[s] / denom if denom > 0 else 0
+                        need_sell = cur_w > tw * (1 + cfg.buffer_band)
+                    else:
+                        need_sell = target_value[s] < cur_value.get(s, 0.0) * 0.999
+                    if need_sell:
                         if down_mask.get(s, False) or pd.isna(prices.get(s, np.nan)):
                             pending_sells.append(s)  # 跌停顺延
                             continue
@@ -233,11 +245,16 @@ class PortfolioBacktester:
                         trade_log.append([str(t)[:10], s, 'SELL', round(px, 3), int(shares[s])])
                         del shares[s]
 
-                # 买入：新目标与加仓
+                # 买入：新目标与加仓（缓冲带内低配不调）
                 for s, tv in target_value.items():
                     cur_v = shares.get(s, 0.0) * prices.get(s, 0.0)
                     if pd.isna(prices.get(s, np.nan)) or tv <= cur_v * 1.001:
-                        continue  # 无价格或无需加仓
+                        continue  # 无价格或已达标
+                    if cfg.buffer_band > 0 and s in shares:
+                        cur_w_s = cur_v / denom if denom > 0 else 0
+                        tw_s = tv / denom if denom > 0 else 0
+                        if cur_w_s >= tw_s * (1 - cfg.buffer_band):
+                            continue  # 在缓冲带内，不调
                     buy_value = min(tv - cur_v, cash)
                     if buy_value <= 0:
                         continue

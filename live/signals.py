@@ -19,7 +19,7 @@ from portfolio.construction import composite_from_matrices
 
 # 生产配置（与回测验收版本一致）
 PRODUCTION_FACTORS = {'ep': 1.0, 'bp': 1.0, 'sp': 1.0, 'size': -1.0, 'leverage': -1.0}
-DEFAULT_TOP_N = 30          # 小资金验证：Top30（回测为Top100）
+DEFAULT_TOP_N = 100         # 与回测验证一致：Top100（Top30经回测验证跑输）
 WARMUP_DAYS = 400
 
 
