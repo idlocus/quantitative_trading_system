@@ -9,7 +9,8 @@
 合规：正式接入券商后需完成程序化交易报备（券商通道办理）。
 """
 
-from .broker import Order, Broker, PaperBroker, QMTBroker
+from .broker import Order, Broker, PaperBroker
+from .qmt_broker import QMTBroker as QMTLiveBroker
 from .ledger import Ledger
 
 __all__ = ['Order', 'Broker', 'PaperBroker', 'QMTBroker', 'Ledger']
