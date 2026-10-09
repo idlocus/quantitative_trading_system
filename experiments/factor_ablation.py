@@ -49,7 +49,7 @@ def main():
         def run(score, label, topn=100):
             bt = PortfolioBacktester(cache, PortfolioConfig(
                 top_n=topn, rebalance_days=20, slippage=0.001, benchmark_symbol=BENCH))
-            r = bt.run(score)
+            r = bt.run(score, start_date=str(ts))
             save_artifact('portfolio', f'ablation_{era}_{label}',
                           portfolio_payload(r, label=label, extra=bench_extra(bt, r)))
             print(f"  {label:10s}: {r.total_return:+.1%}", flush=True)

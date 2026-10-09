@@ -136,7 +136,8 @@ class PortfolioBacktester:
 
     def run(self, score_mx: pd.DataFrame,
             weight_func=None,
-            score_band: Optional[tuple] = None) -> PortfolioResult:
+            score_band: Optional[tuple] = None,
+            start_date: Optional[str] = None) -> PortfolioResult:
         """
         运行组合回测
 
@@ -144,10 +145,14 @@ class PortfolioBacktester:
             score_mx: 综合分矩阵（dates × symbols，越高越值得买入；时点已保证 ≤t）
             weight_func: 可选自定义权重函数 (symbols, date) -> {sym: w}
             score_band: 可选 (lo, hi) 选股分数带（规避极端尾部，见 select_portfolio）
+            start_date: 可选回测起始日（'YYYY-MM-DD'），截断 warm-up 区间，确保只统计目标时段
         """
         cfg = self.config
         # 前视偏差修正：将信号 shift(1)，确保调仓日 T 使用 T-1 的因子排名
         score_mx = score_mx.shift(1)
+        # 起始日截断：去除 warm-up 前置区间
+        if start_date:
+            score_mx = score_mx.loc[start_date:]
         dates = self.close_mx.index
         dates = dates[(dates >= score_mx.index.min()) & (dates <= score_mx.index.max())]
         process_holdings, process_contrib, trade_log = {}, {}, []

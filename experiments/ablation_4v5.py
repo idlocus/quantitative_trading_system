@@ -42,7 +42,7 @@ def main():
             score = composite_from_matrices(m, directions=dirs)
             bt = PortfolioBacktester(cache, PortfolioConfig(top_n=100, rebalance_days=20,
                                      slippage=0.001, benchmark_symbol=BENCH))
-            r = bt.run(score)
+            r = bt.run(score, start_date=str(ts))
             b = bt.close_mx[BENCH].loc[r.equity_curve.index].ffill()
             extra = {'benchmark_series': {'dates': [str(d)[:10] for d in b.index],
                      'values': [round(float(v/b.iloc[0]*r.initial_capital),2) for v in b.values]}}
