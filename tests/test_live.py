@@ -23,7 +23,9 @@ class TestPaperBroker:
         f = fills[0]
         assert f.status == 'filled'
         assert f.price == pytest.approx(10.01)          # 买入滑点
-        assert f.quantity == pytest.approx(100000 / (10.01 * 1.00031), rel=1e-3)
+        # 整手规则：数量必须是100的整数倍
+        assert f.quantity % 100 == 0
+        assert f.quantity > 0
         # 卖出含印花税
         fills2 = b.execute([Order('A', 'SELL', 0, quantity=f.quantity)],
                            {'A': 10.0}, date(2026, 10, 8))
@@ -40,7 +42,7 @@ class TestPaperBroker:
     def test_zero_qty_rejected(self):
         b = PaperBroker()
         fills = b.execute([Order('A', 'BUY', 0.1, amount=10)], {'A': 100.0}, date(2026, 10, 8))
-        assert '零股' in fills[0].status
+        assert '不足一手' in fills[0].status
 
 
 class TestLedger:

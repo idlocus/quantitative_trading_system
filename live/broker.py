@@ -97,9 +97,13 @@ class PaperBroker(Broker):
             if qty <= 0 and o.amount > 0:
                 fee_rate = self.commission + self.transfer_fee + \
                     (self.stamp_tax if o.side == 'SELL' else 0)
-                qty = int(o.amount / (px * (1 + fee_rate)))
+                if o.side == 'BUY':
+                    # 买入必须整手（100股）
+                    qty = int(o.amount / (px * (1 + fee_rate)) // 100) * 100
+                else:
+                    qty = int(o.amount / (px * (1 + fee_rate)))
             if qty <= 0:
-                fills.append(Fill(o, px, 0, 0, 0, trade_date, status='rejected(零股)'))
+                fills.append(Fill(o, px, 0, 0, 0, trade_date, status='rejected(不足一手)'))
                 continue
             value = px * qty
             commission = value * self.commission

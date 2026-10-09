@@ -96,7 +96,7 @@ def build_orders(targets: List[str], current_weights: Dict[str, float],
     for s in targets:
         w = current_weights.get(s, 0.0)
         if w < target_w * (1 - band):
-            alloc = min(target_w - w, cash_weight + 0.05)  # 允许少量现金透支缓冲
+            alloc = min(target_w - w, cash_weight + 0.05)
             if alloc > 0:
                 orders.append(Order(s, 'BUY', target_w, amount=alloc * total_nav,
                                     note='新入/低配'))

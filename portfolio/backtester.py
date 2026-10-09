@@ -264,12 +264,23 @@ class PortfolioBacktester:
                     if buy_value <= 0:
                         continue
                     px = prices[s] * (1 + cfg.slippage)
-                    cost = buy_value * (cfg.commission + cfg.transfer_fee)
-                    qty = (buy_value - cost) / px
+                    cost_rate = cfg.commission + cfg.transfer_fee
+                    # A股最小交易单位：整手（100股）
+                    qty = int((buy_value / (px * (1 + cost_rate))) // 100) * 100
+                    if qty <= 0:
+                        continue  # 不足一手，跳过
+                    actual_cost = qty * px * cost_rate
+                    actual_value = qty * px + actual_cost
+                    if actual_value > cash:
+                        qty -= 100  # 减一手
+                        if qty <= 0:
+                            continue
+                        actual_cost = qty * px * cost_rate
+                        actual_value = qty * px + actual_cost
                     trade_log.append([str(t)[:10], s, 'BUY', round(px, 3), int(qty)])
                     shares[s] = shares.get(s, 0.0) + qty
-                    cash -= buy_value
-                    total_cost += cost
+                    cash -= actual_value
+                    total_cost += actual_cost
 
                 n_rebalances += 1
                 holdings_history.append({
