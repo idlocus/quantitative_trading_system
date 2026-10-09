@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from risk.constants import BacktestParams
+from .risk_manager import PortfolioRiskManager, RiskLimits
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,6 +43,7 @@ class PortfolioConfig:
     min_daily_turnover: float = 500e4  # 最低日均成交额（500万，流动性过滤）
     impact_coeff: float = 0.10         # 市场冲击系数（sqrt模型）
     min_listing_days: int = 60         # 上市天数过滤（需≥N个交易日数据才可入选）
+    risk_limits: RiskLimits = field(default_factory=RiskLimits)  # 风控约束
 
 
 @dataclass
@@ -102,6 +104,8 @@ class PortfolioBacktester:
                     volume[sym] = pd.Series(pd.to_numeric(df['volume'], errors='coerce').values, index=idx)
         self.close_mx = pd.DataFrame(close).sort_index()
         self.prev_close_mx = self.close_mx.shift(1)
+        # 风险管理器（多层级风控）
+        self.risk_manager = PortfolioRiskManager(config.risk_limits)
         # 成交量矩阵（用于流动性过滤和冲击成本）
         self.volume_mx = pd.DataFrame(volume).reindex(self.close_mx.index).sort_index()
         # 20日均成交额（价格×成交量，用于流动性判定）
@@ -263,6 +267,8 @@ class PortfolioBacktester:
                 buyable_excl = set(up_mask[up_mask == True].index) | set(liq_mask[liq_mask == True].index)  # noqa: E712
                 targets = self._select(scores, buyable_excl, score_band, date=t)
                 target_w = weight_func(targets, t)
+                # 应用风控约束（回撤降仓/单票上限/现金底线）
+                target_w = self.risk_manager.adjust_weights(target_w)
 
                 # 目标市值
                 total_equity = cash + sum(
@@ -370,6 +376,16 @@ class PortfolioBacktester:
             process_holdings[str(t)[:10]] = sorted(day_hold, key=lambda x: -x[1])
             process_contrib[str(t)[:10]] = day_contrib
             equity_curve[t] = eq_total
+
+            # 每日更新风险状态（回撤/波动率/熔断检查）
+            self.risk_manager.update(eq_total, t)
+            if self.risk_manager.state.is_halted:
+                # 硬限触发：清仓所有持仓
+                for s2 in list(shares.keys()):
+                    if not pd.isna(prices.get(s2, np.nan)):
+                        px = prices[s2] * (1 - cfg.slippage)
+                        cash += shares[s2] * px * (1 - cfg.commission - cfg.stamp_tax)
+                        del shares[s2]
 
         # ---- 绩效 ----
         equity = pd.Series(equity_curve).sort_index()
