@@ -41,6 +41,7 @@ class PortfolioConfig:
     max_participation: float = 0.10    # 单日最大成交量占比（10%=不超过日均量10%）
     min_daily_turnover: float = 500e4  # 最低日均成交额（500万，流动性过滤）
     impact_coeff: float = 0.10         # 市场冲击系数（sqrt模型）
+    min_listing_days: int = 60         # 上市天数过滤（需≥N个交易日数据才可入选）
 
 
 @dataclass
@@ -105,6 +106,9 @@ class PortfolioBacktester:
             self.avg_turnover_20d = (self.close_mx * self.volume_mx).rolling(20).mean()
         else:
             self.avg_turnover_20d = pd.DataFrame(index=self.close_mx.index, columns=self.close_mx.columns)
+        # 上市天数矩阵（累计有效数据天数，用于上市天数过滤）
+        # 动态处理：新上市股在达到 min_listing_days 前不可选，退市股数据变NaN后自然排除
+        self.data_age = self.close_mx.notna().cumsum()
 
     # ---- 涨跌停判定（向量化）----
 
@@ -254,7 +258,7 @@ class PortfolioBacktester:
                 liq_mask = self._liquidity_mask(t)
                 # 排除当日涨停（不可买）、流动性不足、已无价格数据的股票
                 buyable_excl = set(up_mask[up_mask == True].index) | set(liq_mask[liq_mask == True].index)  # noqa: E712
-                targets = self._select(scores, buyable_excl, score_band)
+                targets = self._select(scores, buyable_excl, score_band, date=t)
                 target_w = weight_func(targets, t)
 
                 # 目标市值
@@ -402,9 +406,20 @@ class PortfolioBacktester:
         )
 
     def _select(self, scores: pd.Series, exclude: set,
-                score_band: Optional[tuple] = None) -> List[str]:
-        """调仓日选股（排除涨停不可买与无分标的，可选分数带过滤）"""
+                score_band: Optional[tuple] = None,
+                date=None) -> List[str]:
+        """调仓日选股（排除涨停/流动性不足/上市不足N日/无分标的）"""
         from .construction import select_portfolio
+
+        # 上市天数过滤：需≥N个交易日数据（动态处理新上市和退市）
+        if self.config.min_listing_days > 0 and date is not None:
+            try:
+                age = self.data_age.loc[date]
+                too_new = set(age[age < self.config.min_listing_days].index)
+                exclude = exclude | too_new
+            except KeyError:
+                pass
+
         return select_portfolio(scores, self.config.top_n,
                                 exclude_symbols=exclude, band=score_band)
 

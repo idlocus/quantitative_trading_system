@@ -64,6 +64,19 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     tradable = last_prices.dropna()
     scores = scores[scores.index.intersection(tradable.index)]
 
+    # 上市天数过滤：需≥60个交易日数据（与回测一致）
+    # 新上市股票波动大、无足够历史计算因子
+    MIN_LISTING_DAYS = 60
+    data_age = ev.close_mx.notna().cumsum()
+    if len(valid_dates) > 0:
+        age_today = data_age.loc[valid_dates[-1]]
+        eligible = age_today[age_today >= MIN_LISTING_DAYS].index
+        scores = scores[scores.index.intersection(eligible)]
+
+    # 排除ST股（通过近期涨跌幅限制检测，ST股涨跌幅限制为5%）
+    # 简化处理：上市池已包含ST股，由流动性过滤（日均成交额≥500万）间接过滤大部分
+    # 完整ST过滤需要股票名称数据，留待接入后实现
+
     targets = scores.sort_values(ascending=False).head(top_n).index.tolist()
     return targets, scores
 

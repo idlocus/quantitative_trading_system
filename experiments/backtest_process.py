@@ -27,7 +27,7 @@ def main():
 
     for era, d0, d1, ts in ERAS:
         print(f"===== {era} =====", flush=True)
-        pool = sorted(ds.list_symbols(as_of=ts))
+        pool = sorted(ds.list_symbols(as_of=ts))  # DYNAMIC UNIVERSE: 起始日PIT池+60日上市过滤由backtester动态处理
         cache = loader.preload_klines(pool + [BENCH], d0, d1)._cache
         mats = {}
         for f in D4:

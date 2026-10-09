@@ -88,7 +88,7 @@ class TestPortfolioBacktester:
         """基本运行：期末资金正确、成本累计>0、持有数≤top_n"""
         cache = make_cache(n_sym=30, n_days=100, seed=3,
                            drift_fn=lambda i: 0.001 * (i - 15))
-        cfg = PortfolioConfig(top_n=10, rebalance_days=5,
+        cfg = PortfolioConfig(min_listing_days=0, top_n=10, rebalance_days=5,
                               initial_capital=1_000_000, slippage=0.001,
                               benchmark_symbol='')
         bt = PortfolioBacktester(cache, cfg)
@@ -117,7 +117,7 @@ class TestPortfolioBacktester:
             'volume': np.full(len(dates), 1e6),
         })
 
-        cfg = PortfolioConfig(top_n=3, rebalance_days=5, benchmark_symbol='',
+        cfg = PortfolioConfig(min_listing_days=0, top_n=3, rebalance_days=5, benchmark_symbol='',
                               enforce_price_limits=True)
         bt = PortfolioBacktester(cache, cfg)
         # 综合分：S000 永远最高分（涨最多）
@@ -130,7 +130,7 @@ class TestPortfolioBacktester:
         assert not bought_s000, "连续涨停股应被排除，永远买不进"
 
         # 关闭约束后应能买入（对照）
-        cfg2 = PortfolioConfig(top_n=3, rebalance_days=5, benchmark_symbol='',
+        cfg2 = PortfolioConfig(min_listing_days=0, top_n=3, rebalance_days=5, benchmark_symbol='',
                                enforce_price_limits=False)
         bt2 = PortfolioBacktester(cache, cfg2)
         result2 = bt2.run(bt2.close_mx.pct_change(10))
@@ -140,7 +140,7 @@ class TestPortfolioBacktester:
     def test_equal_weight_baseline_beats_nothing(self):
         """等权全池组合（对照组）应正常运行且收益等于池平均（近似）"""
         cache = make_cache(n_sym=10, n_days=80, seed=7)
-        cfg = PortfolioConfig(top_n=10, rebalance_days=20, benchmark_symbol='',
+        cfg = PortfolioConfig(min_listing_days=0, top_n=10, rebalance_days=20, benchmark_symbol='',
                               slippage=0.0)
         bt = PortfolioBacktester(cache, cfg)
         score = bt.close_mx.pct_change(5)  # 任意分数（全选）
@@ -157,7 +157,7 @@ class TestPortfolioBacktester:
             'low': bench_close, 'close': bench_close,
             'volume': np.full(len(dates), 1e9),
         })
-        cfg = PortfolioConfig(top_n=5, rebalance_days=10,
+        cfg = PortfolioConfig(min_listing_days=0, top_n=5, rebalance_days=10,
                               benchmark_symbol='000300.SH')
         bt = PortfolioBacktester(cache, cfg)
         result = bt.run(bt.close_mx.pct_change(5))
@@ -166,7 +166,7 @@ class TestPortfolioBacktester:
 
     def test_turnover_nonnegative(self):
         cache = make_cache(n_sym=15, n_days=70, seed=11)
-        cfg = PortfolioConfig(top_n=5, rebalance_days=5, benchmark_symbol='')
+        cfg = PortfolioConfig(min_listing_days=0, top_n=5, rebalance_days=5, benchmark_symbol='')
         bt = PortfolioBacktester(cache, cfg)
         result = bt.run(bt.close_mx.pct_change(10))
         assert 0 <= result.avg_turnover <= 1.0
