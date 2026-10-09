@@ -35,7 +35,6 @@ def main():
             if not fm.empty: mats[f] = fm.loc[pd.Timestamp(d0):pd.Timestamp(d1)]
         lev = pit.get_factor_matrix('leverage', pool, d0, d1).loc[pd.Timestamp(d0):pd.Timestamp(d1)]
 
-        del crev  # 本轮只做4v5一致性复检
         combos = [('4因子基线', mats, D4),
                   ('5因子生产', {**mats, 'leverage': lev}, {**D4, 'leverage': -1.0})]
         for label, m, dirs in combos:

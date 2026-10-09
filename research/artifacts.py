@@ -6,6 +6,7 @@
 """
 
 import json
+from datetime import datetime
 import os
 from datetime import date as _date
 
@@ -27,9 +28,20 @@ def _jsonable(obj):
     return str(obj)
 
 
+def _git_hash() -> str:
+    """获取当前代码的 git commit hash（定位代码版本）"""
+    import subprocess
+    try:
+        r = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                          capture_output=True, text=True, timeout=5)
+        return r.stdout.strip()
+    except Exception:
+        return 'unknown'
+
+
 def save_artifact(kind: str, name: str, payload: dict) -> str:
     """
-    保存研究工件 JSON
+    保存研究工件 JSON（自动注入版本元数据）
 
     Args:
         kind: 'portfolio' | 'factor' | 'walkforward'
@@ -39,6 +51,12 @@ def save_artifact(kind: str, name: str, payload: dict) -> str:
         保存路径
     """
     os.makedirs(DATA_DIR, exist_ok=True)
+    # 自动注入版本元数据（代码版本、生成时间）
+    if '_meta' not in payload:
+        payload['_meta'] = {
+            'code_version': _git_hash(),
+            'generated_at': datetime.now().isoformat(),
+        }
     path = os.path.join(DATA_DIR, f"{kind}_{name}.json")
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(_jsonable(payload), f, ensure_ascii=False)
