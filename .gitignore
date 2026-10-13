@@ -27,3 +27,11 @@ ai-created/
 *.db
 .env
 data_cache/
+
+# 券商对账单（含账户敏感信息，勿提交）
+live/statements/
+# QMT在途订单台账（运行时状态）
+live/qmt_orders.json
+
+# 运行时状态（独立于源码部署；旧环境状态不随代码复制）
+runtime/

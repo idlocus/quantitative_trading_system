@@ -23,7 +23,10 @@ logger = get_logger(__name__)
 ALL_A_SECTOR_ID = "a001010100000000"
 
 # 批量预加载参数
-KLINE_FIELDS = ["open", "high", "low", "close", "volume"]
+# K线字段（含成交额：wsd 'amt' 单位=元；volume 单位=股——与 DB 归一化口径一致。
+# adjclose：wsd 默认返回不复权价，此处暂以 close 同值退化（Wind客户端源
+# 不单独请求复权因子——实盘路径用不复权价是正确口径；回测优先走DB源取adjclose））
+KLINE_FIELDS = ["open", "high", "low", "close", "volume", "amt"]
 BATCH_CHUNK = 50  # 每次 wsd 的代码数
 
 
@@ -90,12 +93,13 @@ class WindDataSource:
             df = pd.DataFrame(
                 {f: pd.Series(list(r.Data[fi]), index=times)
                  for fi, f in enumerate(KLINE_FIELDS)}
-            ).dropna(subset=["close"])
+            ).dropna(subset=["open", "high", "low", "close", "volume"])  # 完整K线才可用（盘中残缺bar污染价格）
             if df.empty:
                 return pd.DataFrame()
-            df = df.reset_index().rename(columns={"index": "date"})
-            for f in KLINE_FIELDS:
-                df[f] = pd.to_numeric(df[f], errors="coerce")
+            df = df.reset_index().rename(columns={"index": "date", "amt": "amount"})
+            for f in ["open", "high", "low", "close", "volume", "amount"]:
+                if f in df.columns:
+                    df[f] = pd.to_numeric(df[f], errors="coerce")
             return df
         except Exception as e:
             logger.error(f"Failed to fetch kline for {symbol}: {e}")
@@ -146,15 +150,20 @@ class WindDataSource:
             if "close" not in parts:
                 continue
             try:
-                df = pd.DataFrame(parts).dropna(subset=["close"])
+                df = pd.DataFrame(parts) if parts else pd.DataFrame()
             except Exception:
                 continue
             if df.empty:
                 continue
-            df = df.reset_index().rename(columns={"index": "date"})
-            for f in KLINE_FIELDS:
+            df = df.reset_index().rename(columns={"index": "date", "amt": "amount"})
+            # 行级完整性：残缺bar（如盘中只有close）整行剔除；amount允许缺失
+            core = [f for f in ("open", "high", "low", "close", "volume") if f in df.columns]
+            df = df.dropna(subset=core)
+            for f in ("open", "high", "low", "close", "volume", "amount"):
                 if f in df.columns:
                     df[f] = pd.to_numeric(df[f], errors="coerce")
+            # adjclose=close 同值退化（wsd默认不复权；缓存格式统一）
+            df['adjclose'] = df['close']
             cache[sym] = df
 
         logger.info(f"Wind preload_batch: {len(cache)}/{len(symbols)} symbols cached")

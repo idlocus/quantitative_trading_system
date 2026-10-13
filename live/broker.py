@@ -3,8 +3,8 @@
 """
 券商抽象层 —— 统一下单接口，Paper 模拟与 QMT 实盘同接口切换
 
-实盘切换：QMTBroker 需券商开通量化权限后安装 miniQMT(xtquant)，
-在 _submit_qmt 中实现真实委托（代码已留位，无需改动上层）。
+QMT 实盘实现见 live/qmt_broker.py（唯一 QMTBroker，勿在此另建占位类）。
+执行器统一经 live.make_broker(mode) 构造：paper → PaperBroker，qmt → QMTBroker。
 """
 
 from abc import ABC, abstractmethod
@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, List, Optional
 
+from trading import config as chain
+from trading.rules import (is_limit_up, is_limit_down, round_buy_qty,
+                           round_sell_qty, round_tick)
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,7 +38,8 @@ class Fill:
     commission: float
     taxes: float
     trade_date: date
-    status: str = 'filled'   # filled / rejected
+    status: str = 'filled'   # filled / partial(n/m) / cancelled / rejected
+    trade_id: str = ''       # 券商成交回报ID（对账去重优先键；Paper为空）
 
 
 class Broker(ABC):
@@ -59,61 +63,87 @@ class PaperBroker(Broker):
     与回测引擎同口径。涨跌停不可成交（rejected）。
     """
 
-    def __init__(self, slippage: float = 0.001, commission: float = 0.0003,
-                 stamp_tax: float = 0.0005, transfer_fee: float = 0.00001,
-                 enforce_price_limits: bool = True):
+    def __init__(self, slippage: float = chain.SLIPPAGE,
+                 commission: float = chain.COMMISSION,
+                 stamp_tax: float = chain.STAMP_TAX,
+                 transfer_fee: float = chain.TRANSFER_FEE,
+                 enforce_price_limits: bool = True,
+                 lot_map: Dict[str, int] = None):
         self.slippage = slippage
         self.commission = commission
         self.stamp_tax = stamp_tax
         self.transfer_fee = transfer_fee
         self.enforce_limits = enforce_price_limits
+        self.lot_map = lot_map or {}   # {symbol: 最低申报数量}（BoardParamsProvider，缺省走板块规则）
+
+    def _lot(self, symbol: str) -> int:
+        from trading.rules import min_order_qty
+        return self.lot_map.get(symbol) or min_order_qty(symbol)
 
     def name(self):
         return 'PaperBroker'
 
     def execute(self, orders, prices, trade_date, prev_prices: Optional[Dict[str, float]] = None,
-                available_cash: Optional[float] = None):
+                available_cash: Optional[float] = None,
+                st_symbols: Optional[set] = None,
+                positions: Optional[Dict[str, int]] = None):
+        """
+        st_symbols: 当日 ST 股集合（主板 ST 涨跌幅 ±5%，见 trading/rules）；
+                    不传则按非 ST 处理（数据不可用时的降级行为）。
+        positions:  当前持仓 {symbol: 数量}（卖出数量合法化需要：零股一次性规则）；
+                    不传则卖出数量按订单原样（回测/闸门全仓卖出场景恒合法）。
+        """
         from datetime import datetime as _dt
         if isinstance(trade_date, date) and not isinstance(trade_date, _dt):
             trade_date = _dt.combine(trade_date, _dt.now().time())  # 记录真实执行时刻
         fills = []
         running_cash = available_cash  # 运行时现金追踪（None=不检查）
+        st_symbols = st_symbols or set()
+        positions = positions or {}
         for o in orders:
             raw = prices.get(o.symbol)
             if raw is None or raw <= 0:
                 fills.append(Fill(o, 0, 0, 0, 0, trade_date, status='rejected'))
                 continue
-            # 涨跌停拒单（近似：|涨跌幅|≥9.8%且方向不利）
+            # 涨跌停拒单（主链共享规则：板块比例+ST差异化，回测同实现）
             if self.enforce_limits and prev_prices:
                 prev = prev_prices.get(o.symbol)
                 if prev and prev > 0:
-                    chg = raw / prev - 1
-                    if o.side == 'BUY' and chg > 0.098:
+                    is_st = o.symbol in st_symbols
+                    if o.side == 'BUY' and is_limit_up(o.symbol, raw, prev, st=is_st):
                         fills.append(Fill(o, 0, 0, 0, 0, trade_date, status='rejected(涨停)'))
                         continue
-                    if o.side == 'SELL' and chg < -0.098:
+                    if o.side == 'SELL' and is_limit_down(o.symbol, raw, prev, st=is_st):
                         fills.append(Fill(o, 0, 0, 0, 0, trade_date, status='rejected(跌停)'))
                         continue
             px = raw * (1 + self.slippage) if o.side == 'BUY' else raw * (1 - self.slippage)
+            px = round_tick(o.symbol, px)   # 价格档位 0.01
             qty = o.quantity
             if qty <= 0 and o.amount > 0:
                 fee_rate = self.commission + self.transfer_fee + \
                     (self.stamp_tax if o.side == 'SELL' else 0)
-                if o.side == 'BUY':
-                    # 买入必须整手（100股）
-                    qty = int(o.amount / (px * (1 + fee_rate)) // 100) * 100
-                else:
-                    qty = int(o.amount / (px * (1 + fee_rate)))
+                qty = int(o.amount / (px * (1 + fee_rate)))
+            if o.side == 'BUY':
+                # 申报数量：主板/创业板100整手；科创板≥200且1股递增；北交所≥100且1股递增
+                qty = round_buy_qty(o.symbol, qty, lot=self._lot(o.symbol))
+            elif positions:
+                # 卖出合法化（含零股一次性：全仓申报恒合法）
+                qty = round_sell_qty(o.symbol, qty, positions.get(o.symbol, qty),
+                                     lot=self._lot(o.symbol))
             if qty <= 0:
-                fills.append(Fill(o, px, 0, 0, 0, trade_date, status='rejected(不足一手)'))
+                fills.append(Fill(o, px, 0, 0, 0, trade_date, status='rejected(不足最低申报)'))
                 continue
 
-            # 资金约束：检查可用现金（买入时逐笔扣减）
+            # 资金约束：检查可用现金（买入时逐笔扣减；金额含佣金+过户费）
             value = px * qty
             if o.side == 'BUY' and running_cash is not None:
-                if value > running_cash:
-                    # 资金不足，缩减到可承受的数量
-                    affordable_qty = int(running_cash / (px * 1.005) // 100) * 100
+                buy_fee_rate = self.commission + self.transfer_fee
+                total_cost = value * (1 + buy_fee_rate)
+                if total_cost > running_cash:
+                    # 资金不足：按申报规则缩减（含费用边界，防现金扣负）
+                    affordable_qty = round_buy_qty(o.symbol,
+                                                   int(running_cash / (px * (1 + buy_fee_rate))),
+                                                   lot=self._lot(o.symbol))
                     if affordable_qty <= 0:
                         fills.append(Fill(o, px, 0, 0, 0, trade_date,
                                          status='rejected(资金不足)'))
@@ -132,32 +162,3 @@ class PaperBroker(Broker):
 
             fills.append(Fill(o, px, qty, commission, taxes, trade_date))
         return fills
-
-
-class QMTBroker(Broker):
-    """
-    miniQMT 实盘通道（预留）
-
-    前置条件（用户侧）：
-    1. 券商开通量化交易权限（资金门槛以券商为准）
-    2. 安装 miniQMT 客户端并登录，Python 环境可 import xtquant
-    3. 完成程序化交易报备（券商合规流程）
-    """
-
-    def __init__(self, account_id: str = ''):
-        self.account_id = account_id
-        self._xt = None
-
-    def name(self):
-        return 'QMTBroker'
-
-    def _connect(self):
-        if self._xt is None:
-            from xtquant.xttrader import XtQuantTrader  # noqa: 券商环境就位后启用
-            raise NotImplementedError(
-                "QMT 实盘通道待券商环境就位后启用：安装 miniQMT 并开通权限，"
-                "然后在 _submit_qmt 中实现委托调用")
-
-    def execute(self, orders, prices, trade_date, **kw):
-        self._connect()
-        raise NotImplementedError

@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from trading import config as chain
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,26 +26,30 @@ logger = get_logger(__name__)
 
 @dataclass
 class RiskLimits:
-    """组合风险约束参数"""
+    """组合风险约束参数（阈值单一来源=trading/config，与生产闸门真同源）"""
     # 回撤控制
-    max_drawdown: float = 0.15        # 硬限：超过此值完全清仓
-    drawdown_derisk: float = 0.10     # 软限：超过此值开始降仓
+    max_drawdown: float = chain.DRAWDOWN_HARD
+    drawdown_derisk: float = chain.DRAWDOWN_SOFT
 
     # 波动率目标
-    vol_target: float = 0.25           # 年化波动率目标
-    vol_window: int = 20                # 波动率计算窗口（交易日）
+    vol_target: float = chain.VOL_TARGET
+    vol_window: int = 20
 
     # 集中度
-    max_position_weight: float = 0.05   # 单票最大权重
-    max_sector_weight: float = 0.30      # 单行业最大权重
+    max_position_weight: float = chain.MAX_WEIGHT
+    max_sector_weight: float = 0.30      # 单行业最大权重（回测专用研究约束——
+    #                                     实盘无实时行业映射，降级为BACKTEST_ONLY）
 
     # 换手与现金
-    max_turnover: float = 0.50           # 单次调仓最大换手
-    min_cash_ratio: float = 0.05          # 最低现金比例
+    max_turnover: float = chain.MAX_TURNOVER
+    min_cash_ratio: float = chain.MIN_CASH_RATIO
+
+    # 个股硬止损（此前仅实盘有、回测无——统一后双方同源）
+    stop_loss_pct: float = chain.STOP_LOSS_PCT
 
     # 极端行情
-    circuit_breaker_market: float = 0.05   # 基准单日跌幅熔断线
-    circuit_breaker_portfolio: float = 0.07  # 组合单日跌幅熔断线
+    circuit_breaker_market: float = chain.MARKET_DAILY_CRASH
+    circuit_breaker_portfolio: float = chain.PORTFOLIO_DAILY_CRASH
 
 
 @dataclass
@@ -215,6 +220,54 @@ class PortfolioRiskManager:
                 f'换手率{turnover:.0%}超限{self.limits.max_turnover:.0%}')
             return False, turnover
         return True, turnover
+
+    def cap_sector_weights(self, target_weights: Dict[str, float],
+                           industry_map: Dict[str, str]) -> Dict[str, float]:
+        """
+        行业集中度约束：单行业权重 ≤ max_sector_weight，超限行业按比例缩降。
+
+        Args:
+            target_weights: 目标权重 {symbol: weight}
+            industry_map:   行业映射 {symbol: 行业名}；为空时约束不生效（返回原值）
+        """
+        cap = self.limits.max_sector_weight
+        if not industry_map or cap <= 0 or not target_weights:
+            return target_weights
+        w = dict(target_weights)
+        from collections import defaultdict
+        for _ in range(10):  # 缩降后其它行业不变，迭代至收敛（正常1-2轮）
+            sums = defaultdict(float)
+            for s, wt in w.items():
+                sums[industry_map.get(s, '__unknown__')] += wt
+            over = {k: v for k, v in sums.items() if v > cap + 1e-9}
+            if not over:
+                break
+            for sec, tot in over.items():
+                scale = cap / tot
+                for s in list(w):
+                    if industry_map.get(s, '__unknown__') == sec:
+                        w[s] *= scale
+            self.state.active_constraints.append(f'行业[{sec}]权重{tot:.0%}>上限{cap:.0%}，已缩降')
+        return w
+
+    def blend_for_turnover(self, cur_weights: Dict[str, float],
+                           target_weights: Dict[str, float]) -> Dict[str, float]:
+        """
+        换手上限回缩：目标隐含换手超限时，目标权重向当前权重线性回缩，
+        使实际换手 = max_turnover。返回回缩后的权重。
+        """
+        all_syms = set(cur_weights) | set(target_weights)
+        turnover = sum(abs(target_weights.get(s, 0) - cur_weights.get(s, 0))
+                       for s in all_syms) / 2
+        if turnover <= self.limits.max_turnover or turnover <= 0:
+            return target_weights
+        lam = self.limits.max_turnover / turnover
+        blended = {s: cur_weights.get(s, 0.0)
+                   + lam * (target_weights.get(s, 0.0) - cur_weights.get(s, 0.0))
+                   for s in all_syms}
+        self.state.active_constraints.append(
+            f'换手{turnover:.0%}超限{self.limits.max_turnover:.0%}，目标权重回缩×{lam:.2f}')
+        return {s: max(v, 0.0) for s, v in blended.items()}
 
     def get_risk_report(self) -> str:
         """生成风险状态报告"""

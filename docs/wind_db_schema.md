@@ -23,8 +23,15 @@
 | s_dq_close | NUMBER(20,4) | 收盘价(元) | |
 | s_dq_change | NUMBER(20,4) | 涨跌(元) | |
 | s_dq_pctchange | NUMBER(20,4) | 涨跌幅(%) | |
-| s_dq_volume | NUMBER(20,4) | 成交量(手) | |
-| s_dq_amount | NUMBER(20,4) | 成交金额(千元) | |
+| s_dq_volume | NUMBER(20,4) | 成交量(手) | **数据层读取时×100归一为股** |
+| s_dq_amount | NUMBER(20,4) | 成交金额(千元) | **数据层读取时×1000归一为元**；K线缓存列名 `amount` |
+
+> **单位归一化口径（2026-10-12 起强制）**：`data/layered.py` 读取 DB 时
+> volume×100（手→股）、amount×1000（千元→元）；Wind 客户端 wsd
+> volume=股、amt=元（列名归一为 `amount`）。所有层输出统一 **volume=股、amount=元**，
+> 消费方（流动性过滤/参与率/冲击成本）经 `data/turnover.py` 取数，
+> 禁止自行 close×volume（历史上 DB 行手单位混入缓存导致成交额低估 100 倍，
+> 已由 scripts/migrate_kline_units.py 完成缓存迁移）。
 | s_dq_adjpreclose | NUMBER(20,4) | 复权昨收盘价(元) | 昨收盘价*复权因子 |
 | s_dq_adjopen | NUMBER(20,4) | 复权开盘价(元) | 开盘价*复权因子 |
 | s_dq_adjhigh | NUMBER(20,4) | 复权最高价(元) | 最高价*复权因子 |

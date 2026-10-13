@@ -17,6 +17,7 @@ import pandas as pd
 
 from data.layered import LayeredDataSource
 from indicators.momentum_indicators import RSI
+from live.risk_gate import RiskGate, render_gate_markdown
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,7 +42,8 @@ class JournalWriter:
     def write_am(self, ds: LayeredDataSource) -> dict:
         """盘前：市场展望（基于昨收）+ 决策依据。返回信号上下文供 pm 使用。"""
         as_of = date.today()
-        prev_trading = self._prev_trading_day(ds, as_of)
+        from live.signals import signal_date_for, generate_production_signal
+        prev_trading = signal_date_for(ds, as_of)   # 严格 < 今天的信号日（盘后重跑也不前视）
 
         lines = [f"# 交易日志 {as_of.isoformat()}", "",
                  f"- 生成时间：盘前阶段 | 数据截至 {prev_trading} 收盘（PIT）", ""]
@@ -52,13 +54,25 @@ class JournalWriter:
         # 1.5 持仓风险扫描 + 组合指标 + 市场宽度
         lines += self._pre_market_analytics(ds, prev_trading)
 
-        # 2. 决策依据（信号基于昨收）
-        from live.signals import generate_target, build_orders
-        targets, scores = generate_target(ds, prev_trading, top_n=self.top_n)
-        prices = self._prices(ds, set(targets) | set(self.ledger.positions), prev_trading)
+        # 2. 决策依据（信号基于昨收；经由生产唯一入口 generate_production_signal，
+        #    与 PM 执行/回放同源——禁止直调 generate_target 产生第二套口径）
+        from live.signals import build_orders
+        psig = generate_production_signal(ds, as_of, top_n=self.top_n)
+        targets, scores = psig.targets, psig.scores
+        assert psig.signal_date == prev_trading, "AM 信号日必须等于预览基准日"
+        prices, prev_prices = self._prices_with_prev(
+            ds, set(targets) | set(self.ledger.positions), prev_trading)
         nav = self.ledger.last_nav() or self.ledger.cash
         cur_w = self.ledger.positions and self.ledger.current_weights(prices) or {}
         orders = build_orders(targets, cur_w, nav, top_n=self.top_n)
+
+        # 风控闸门预览（基于昨收；收盘后 pm 以当日数据复核执行。
+        # st_data_ok 与 PM 同源（psig.st_ok），保证 AM 预览与实际执行口径一致）
+        bench_cache = ds.preload_batch(['000300.SH'], prev_trading - timedelta(days=20), prev_trading)
+        gate = RiskGate()
+        decision = gate.review(orders, self.ledger, prices, prev_prices, targets,
+                               bench_df=bench_cache.get('000300.SH'), as_of=prev_trading,
+                               st_data_ok=psig.st_ok)
 
         lines += ["## 三、盘前决策依据", "",
                   f"- 生产信号：5因子（EP/BP/SP/Size/低杠杆）Top{self.top_n}，"
@@ -75,13 +89,14 @@ class JournalWriter:
                 lines.append(f"| {o.side} | {o.symbol} | {o.amount:,.0f} | {reason} |")
             lines.append("")
 
-        # 风控检查
+        # 风控检查（L2-L4 执行闸门 + 基础约束）
         w = 1.0 / max(len(targets), 1)
-        lines += ["## 四、盘前风控检查", "",
-                  f"- 单票目标权重 {w:.1%}（上限 5%）：{'通过' if w <= 0.05 else '超限'}",
-                  f"- 持仓数 {len(targets)}（目标 {self.top_n}）",
-                  f"- 现金比例 {(1 - min(1.0, len(targets) * w)):.1%}",
-                  f"- 涨跌停约束：执行层自动拒单", ""]
+        basic = [f"- 单票目标权重 {w:.1%}（上限 5%）：{'通过' if w <= 0.05 else '超限'}",
+                 f"- 持仓数 {len(targets)}（目标 {self.top_n}）",
+                 f"- 现金比例 {(1 - min(1.0, len(targets) * w)):.1%}",
+                 "- 涨跌停约束：执行层自动拒单", ""]
+        lines += ["## 四、盘前风控检查（执行闸门，基于昨收预览；收盘后以当日数据复核）", ""]
+        lines += render_gate_markdown(decision, basic)
 
         with open(self.path, 'w', encoding='utf-8') as f:
             f.write("\n".join(lines))
@@ -93,7 +108,8 @@ class JournalWriter:
 
     # ================= PM：盘后 =================
 
-    def write_pm(self, ds: LayeredDataSource, fills: List, am_ctx: dict) -> str:
+    def write_pm(self, ds: LayeredDataSource, fills: List, am_ctx: dict,
+                 gate=None, recon=None) -> str:
         """盘后：成交记录 + 持仓归因 + 收盘点评（追加）"""
         as_of = date.today()
         symbols = set(self.ledger.positions) | {f.order.symbol for f in fills}
@@ -102,6 +118,17 @@ class JournalWriter:
 
         lines = ["---", "", f"*以下为盘后阶段（{as_of} 收盘后生成）*", "",
                  "## 四、成交记录", ""]
+        # 风控闸门执行记录（L2-L4 当日实际生效的规则）
+        if gate is not None:
+            lines += [f"- 执行闸门：**{gate.verdict_cn}**｜仓位上限 {gate.exposure:.0%}｜"
+                      f"放行 {len(gate.orders)} 条 / 拦截 {len(gate.suppressed)} 条 / "
+                      f"强制卖出 {len(gate.forced_sells)} 条", ""]
+            for i in gate.data_issues:
+                lines.append(f"  - [L2] {i}")
+            for r in gate.reasons:
+                lines.append(f"  - {r}")
+            if gate.data_issues or gate.reasons:
+                lines.append("")
         if fills:
             lines += ["| 状态 | 代码 | 方向 | 价格 | 数量 | 佣金 | 税费 |", "|------|------|------|------|------|------|------|"]
             for f in fills:
@@ -147,6 +174,18 @@ class JournalWriter:
                 bot3 = ", ".join(f"{s}({v:+,.0f})" for s, v in contribs[-3:])
                 lines += ["", f"- 当日贡献前三：{top3}", f"- 当日贡献后三：{bot3}", ""]
 
+        # 账实核对（当日对账单存在时）
+        if recon is not None:
+            lines += recon.render_markdown()
+        else:
+            last = self.ledger._d['meta'].get('last_recon')
+            status = (f"上次 {last['date']} {'一致' if last['ok'] else str(last['n_diffs']) + ' 项差异'}"
+                      if last else "从未对账")
+            lines += ["## 六、账实核对", "",
+                      f"- 今日无对账单（{status}）；将券商App持仓/资金誊入 "
+                      "`live/statements/今日.json` 后自动核对，"
+                      "或运行 `python run_live.py --statement-template`", ""]
+
         # 收盘点评
         lines += self._closing_comment(ds, as_of, prices_prev, prices_today)
 
@@ -173,7 +212,9 @@ class JournalWriter:
             return lines
 
         # ── 持仓风险扫描 ──
-        lines += ["## 二、持仓风险扫描", ""]
+        lines += ["## 二、持仓风险扫描", "",
+                  "> L1 预警层：以下信号（均线/RSI/量比/距止损）**仅提示，不触发交易**；",
+                  "> 实际执行的卖出/熔断/停机规则见第四节执行闸门（L2-L4）。", ""]
         lines += ["| 代码 | 盈亏% | RSI | vs MA20 | vs MA50 | 量比 | 距止损 | 信号 |",
                   "|------|-------|-----|---------|---------|------|--------|------|"]
         alerts = []
@@ -470,7 +511,7 @@ class JournalWriter:
 
     def _closing_comment(self, ds, as_of, prices_prev, prices_today) -> List[str]:
         """收盘点评：事实+计算的自动观察（非主观渲染）"""
-        lines = ["## 六、收盘点评", ""]
+        lines = ["## 七、收盘点评", ""]
         try:
             cache = ds.preload_batch(['000300.SH'], as_of - timedelta(days=10), as_of)
             bench = cache.get('000300.SH')
@@ -522,3 +563,20 @@ class JournalWriter:
             if not d.empty:
                 out[sym] = float(d['close'].iloc[-1])
         return out
+
+    def _prices_with_prev(self, ds, symbols, as_of):
+        """(最新价, 前收盘)——闸门异常检测需要前收盘对照"""
+        if not symbols:
+            return {}, {}
+        cache = ds.preload_batch(list(symbols), as_of - timedelta(days=15), as_of)
+        prices, prev = {}, {}
+        for sym, df in cache.items():
+            if df is None or df.empty:
+                continue
+            d = df[df['date'] <= pd.Timestamp(as_of)]
+            if d.empty:
+                continue
+            prices[sym] = float(d['close'].iloc[-1])
+            if len(d) > 1:
+                prev[sym] = float(d['close'].iloc[-2])
+        return prices, prev

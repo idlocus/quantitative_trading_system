@@ -1,17 +1,17 @@
 # 量化交易系统
 
 > 项目原则：简单、干净、整洁，用最少的工作量、最清晰的逻辑实现最终目的。
+> 文档索引：[docs/README.md](README.md)（按场景导航）
 
 ---
 
 ## 1. 项目概述
 
 构建一个简洁、专注的量化交易系统：
-- 通用框架（股票 + 商品期货）
-- 短线选股（每天1-5只）
-- 多指标组合确认选股（可配置）
-- 信号强度 → 仓位分配
-- 完整回测引擎 + 可视化报告
+- **主链**（生产/回测/实盘）：5因子Top100等权组合，T-1信号+T日执行
+- **执行风控**：L2数据停机/L3组合熔断/L4个股止损（指令改写层）
+- **账实核对**：每日对账、差异报告、超额卖出防线
+- **每日重放回测**：逐日复刻生产语义（组件同源，非近似）
 
 ---
 
@@ -20,31 +20,45 @@
 ```
 quant-project/
 ├── .env / .env.example     # 环境变量（Oracle凭据等，.env不入库）
-├── run_live.py             # 实盘驱动（Paper/QMT，每日信号→订单→账本）
+├── run_daily.py            # ★ 每日主流程 CLI（AM日志+PM执行，Paper/QMT）
+├── run_live.py             # 实盘信号驱动（--signal --execute paper/qmt）
+├── run_daily_replay.py     # ★ 每日重放回测（严格生产语义，--compare A/B）
+├── run_portfolio_backtest.py # 因子组合回测（--fundamental/--band/--all-equal）
+├── run_portfolio_walkforward.py # 组合滚动样本外验证
 ├── run_scan.py             # 每日选股扫描
-├── run_backtest.py         # 逐股策略回测（--rolling 滚动窗口）
+├── run_backtest.py         # 逐股策略回测（旧引擎，已弃用）
 ├── run_factor_eval.py      # 因子评价（--source wind/akshare）
 ├── run_fundamental_eval.py # 基本面因子评价
-├── run_portfolio_backtest.py # 因子组合回测（--fundamental/--band）
-├── run_portfolio_walkforward.py # 组合滚动样本外验证
 │
-├── config/                 # 系统配置
+├── trading/                # ★ 主链共享层（config+rules，回测与实盘同源）
 ├── data/                   # 三层数据源（layered: 缓存→DB→客户端）
-│   ├── fundamentals.py     # 日频估值字段矩阵
-│   ├── fundamental_pit.py  # 公告日PIT财务因子
-│   └── consensus_pit.py    # 一致预期PIT因子
-├── indicators/             # 技术指标库（注册表）
-├── selection/ strategy/    # 规则选股与策略（历史保留）
-├── research/               # 因子评价/风险模型/过拟合防御/工件
-├── portfolio/              # 组合回测/优化器/对冲
-├── risk/                   # 风控常量与仓位
-├── market_env/ sector/     # 市场环境评分/板块（历史保留）
-├── live/                   # 实盘模块（broker/ledger/signals）
-├── webapp/                 # 研究仪表盘与报告浏览器
-├── experiments/            # 可复现实验脚本（消融/筛选/对冲）
-├── tests/                  # 115项单元测试
-├── docs/                   # SYSTEM/STAGE_REPORT/PROGRESS_LOG
-├── results/                # 报告与结构化工件（运行产物）
+│   ├── layered.py          # K线归一化（volume=股/amount=元/adjclose双轨）
+│   ├── st_provider.py      # ST状态（ASHAREST PIT）
+│   ├── turnover.py         # 日成交额统一口径
+│   └── board_params.py     # 申报数量（LOT_SIZE表）
+├── live/                   # ★ 实盘模块
+│   ├── signals.py          # 生产信号唯一入口 generate_production_signal
+│   ├── risk_gate.py        # 执行风控闸门（L2/L3/L4）
+│   ├── broker.py           # PaperBroker 模拟撮合
+│   ├── qmt_broker.py       # QMT实盘通道（等待券商环境验证）
+│   ├── ledger.py           # 持仓账本（去重/零股/超额卖出防线）
+│   ├── reconcile.py        # 账实核对
+│   └── journal.py          # 每日交易日志
+├── portfolio/              # 组合回测
+│   ├── backtester.py       # 近似口径回测器
+│   ├── daily_replay.py     # ★ 每日重放回测器（严格生产语义）
+│   ├── tradable_benchmark.py # 可交易等权对照
+│   └── risk_manager.py     # 研究风控（回撤/波动率/行业）
+├── selection/ strategy/ backtesting/  # ⚠️ DEPRECATED 研究遗留
+├── research/               # 因子评价/风险模型/工件
+├── indicators/             # 技术指标库
+├── market_env/ sector/     # 市场环境评分/板块
+├── webapp/                 # 研究仪表盘
+├── experiments/            # 可复现实验脚本
+├── tests/                  # 295项单元测试
+├── docs/                   # 文档（README.md为索引）
+├── runtime/                # 运行时状态（gitignored：risk_state/qmt_orders）
+├── results/                # 报告与结构化工件
 └── data_cache/             # 本地parquet缓存（可再生，不入库）
 ```
 

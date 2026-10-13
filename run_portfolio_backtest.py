@@ -8,15 +8,16 @@
     python run_portfolio_backtest.py --universe 500 --top 50 --rebalance 5 \
         --factors mfi,rsi,cci --direction negative
 
-    # 对照组：全池等权（不做因子选择）
-    python run_portfolio_backtest.py --universe 500 --top 500 --rebalance 5 \
-        --factors mfi,rsi,cci --direction negative --all-equal
+    # 对照组：全池等权（不做因子选择，跳过因子计算）
+    python run_portfolio_backtest.py --universe 500 --rebalance 5 --all-equal
 """
 
 import argparse
 import os
 import sys
 from datetime import date, timedelta
+
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -41,6 +42,8 @@ def main():
                         help='因子方向：negative=反转（买低动量）')
     parser.add_argument('--weight', choices=['equal', 'inverse_vol'], default='equal')
     parser.add_argument('--slippage', type=float, default=0.001)
+    parser.add_argument('--buffer', type=float, default=None,
+                        help='权重缓冲带（默认=主链0.20与生产一致；传0复现旧全量换仓口径）')
     parser.add_argument('--all-equal', action='store_true',
                         help='对照组：不选股，全池等权（top=universe 时等同）')
     parser.add_argument('--fundamental', default=None,
@@ -67,7 +70,15 @@ def main():
     print(f"已缓存: {len(cache)} 只")
 
     # 2. 因子合成（direction=negative → 买因子值低的，即反转）
-    if args.fundamental:
+    if args.all_equal:
+        # 对照组：全池等权（不选股；top 提到全池，跳过全部因子计算）
+        from portfolio.tradable_benchmark import all_equal_scores as _aes
+        _probe_dates = pd.DatetimeIndex(pd.to_datetime(cache['000300.SH']['date']))
+        score_mx = _aes(_probe_dates, list(cache.keys()))
+        args.top = max(args.top, score_mx.shape[1])
+        factor_names = ['全池等权']
+        print(f"对照组 --all-equal：全池 {score_mx.shape[1]} 只等权（不做因子选择）")
+    elif args.fundamental:
         # 基本面模式：外部矩阵合成（ep/bp/sp/dp/size）
         from data.fundamentals import (WindFundamentalProvider, FUNDAMENTAL_FACTORS,
                                        build_fundamental_matrix)
@@ -88,6 +99,7 @@ def main():
                 directions[f] = default_dir
         print(f"合成综合分: {list(matrices)} directions={directions} ...")
         score_mx = composite_from_matrices(matrices, directions=directions)
+        factor_names = fnames          # 报告文件名（修复：此前仅动量分支定义，--save-report 必崩）
     else:
         factor_names = [f.strip() for f in args.factors.split(',') if f.strip()]
         for f in factor_names:
@@ -106,6 +118,8 @@ def main():
     print(f"综合分矩阵: {score_mx.shape[0]} 天 × {score_mx.shape[1]} 只")
 
     # 3. 组合回测
+    from trading import config as chain
+    buffer_band = args.buffer if args.buffer is not None else chain.BUFFER_BAND
     score_band = None
     if args.band:
         lo, hi = [float(x) for x in args.band.split(',')]
@@ -117,6 +131,7 @@ def main():
         bt = PortfolioBacktester(cache, PortfolioConfig(
             top_n=args.top, rebalance_days=args.rebalance,
             slippage=args.slippage, weight_method=args.weight,
+            buffer_band=buffer_band,
         ))
         result = bt.run(score_mx, weight_func=lambda syms, d: inverse_vol_weights(
             bt.close_mx, syms, d, max_weight=0.05), score_band=score_band)
@@ -124,6 +139,7 @@ def main():
         bt = PortfolioBacktester(cache, PortfolioConfig(
             top_n=args.top, rebalance_days=args.rebalance,
             slippage=args.slippage,
+            buffer_band=buffer_band,
         ))
         result = bt.run(score_mx, score_band=score_band)
 

@@ -19,7 +19,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def audit_valuation_backfill(dsn='10.1.33.123:1521/info', user='wind', password='windPrd22',
+def audit_valuation_backfill(dsn=None, user=None, password=None,
                             sample_dates=None) -> dict:
     """
     检测估值表回填风险
@@ -36,6 +36,16 @@ def audit_valuation_backfill(dsn='10.1.33.123:1521/info', user='wind', password=
             'recommendation': str,       # 建议
         }
     """
+    dsn = dsn or os.getenv('ORACLE_DSN', '')
+    user = user or os.getenv('ORACLE_USER', '')
+    password = password or os.getenv('ORACLE_PASSWORD', '')
+    if not all([dsn, user, password]):
+        raise RuntimeError("数据库连接信息缺失：设置 ORACLE_DSN / ORACLE_USER / ORACLE_PASSWORD 环境变量（.env）")
+    dsn = dsn or os.getenv('ORACLE_DSN', '')
+    user = user or os.getenv('ORACLE_USER', '')
+    password = password or os.getenv('ORACLE_PASSWORD', '')
+    if not all([dsn, user, password]):
+        raise RuntimeError("数据库连接信息缺失：设置 ORACLE_DSN / ORACLE_USER / ORACLE_PASSWORD 环境变量（.env）")
     import oracledb
     oracledb.init_oracle_client()
     conn = oracledb.connect(user=user, password=password, dsn=dsn)
@@ -98,7 +108,7 @@ def audit_valuation_backfill(dsn='10.1.33.123:1521/info', user='wind', password=
         conn.close()
 
 
-def audit_financial_pit(dsn='10.1.33.123:1521/info', user='wind', password='windPrd22') -> dict:
+def audit_financial_pit(dsn=None, user=None, password=None) -> dict:
     """
     检测财务表 PIT 一致性
 
@@ -113,6 +123,16 @@ def audit_financial_pit(dsn='10.1.33.123:1521/info', user='wind', password='wind
             'pit_quality': str,         # 'good' | 'acceptable' | 'poor'
         }
     """
+    dsn = dsn or os.getenv('ORACLE_DSN', '')
+    user = user or os.getenv('ORACLE_USER', '')
+    password = password or os.getenv('ORACLE_PASSWORD', '')
+    if not all([dsn, user, password]):
+        raise RuntimeError("数据库连接信息缺失：设置 ORACLE_DSN / ORACLE_USER / ORACLE_PASSWORD 环境变量（.env）")
+    dsn = dsn or os.getenv('ORACLE_DSN', '')
+    user = user or os.getenv('ORACLE_USER', '')
+    password = password or os.getenv('ORACLE_PASSWORD', '')
+    if not all([dsn, user, password]):
+        raise RuntimeError("数据库连接信息缺失：设置 ORACLE_DSN / ORACLE_USER / ORACLE_PASSWORD 环境变量（.env）")
     import oracledb
     oracledb.init_oracle_client()
     conn = oracledb.connect(user=user, password=password, dsn=dsn)

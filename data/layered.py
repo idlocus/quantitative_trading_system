@@ -36,6 +36,10 @@ DB_FIELD_MAP = {
 CLIENT_ONLY_FIELDS = {'dividendyield2'}
 
 KLINE_FIELDS = ['open', 'high', 'low', 'close', 'volume']
+# 单位归一化口径（所有层统一，消费方无需再换算）：
+#   volume = 股；amount = 元
+# DB ASHAREEODPRICES/AINDEXEODPRICES 原生单位：volume=手、amount=千元 → 读取时×100/×1000
+# Wind 客户端 wsd：volume=股、amt=元 → 原样（列名 amt→amount）
 _DB_KLINE_COLS = {'open': 'S_DQ_ADJOPEN', 'high': 'S_DQ_ADJHIGH', 'low': 'S_DQ_ADJLOW',
                   'close': 'S_DQ_ADJCLOSE', 'volume': 'S_DQ_VOLUME'}
 
@@ -123,7 +127,7 @@ class LayeredDataSource:
             for sym, df in fetched.items():
                 results[sym] = self._merge_kline(results.get(sym), df)
                 self.stats['db_rows'] += len(df)
-            missing = {s: g for s, g in self._missing_after(results, start, end).items() if g}
+            missing = {s: g for s, g in self._missing_after(results, symbols, start, end).items() if g}
             logger.info(f"[layered] ② DB 补齐后仍缺 {len(missing)} 只")
 
         # ③ WindPy 客户端（仅差额，省配额）
@@ -167,7 +171,14 @@ class LayeredDataSource:
             return None, [(start, end)]
         if df.empty:
             return None, [(start, end)]
+        # 缓存版本检测：无 adjclose 列 = 旧格式（close 是前复权价，与
+        # 不复权新格式不兼容）→ 全量刷新
+        if 'adjclose' not in df.columns:
+            return None, [(start, end)]
         df = df[(df['date'] >= pd.Timestamp(start)) & (df['date'] <= pd.Timestamp(end))]
+        if df.empty:
+            return None, [(start, end)]
+        df = self._complete_rows(df)   # 剔除残缺K线行（如盘中只有close的bar）
         if df.empty:
             return None, [(start, end)]
         gaps = []
@@ -178,6 +189,14 @@ class LayeredDataSource:
             gaps.append(((last + pd.Timedelta(days=1)).date(), end))
         return df, gaps
 
+    @staticmethod
+    def _complete_rows(df: pd.DataFrame) -> pd.DataFrame:
+        """行级完整性：OHLCV 任一为 NaN 的行不可用（残缺bar污染价格与涨跌检测）"""
+        if df is None or df.empty:
+            return df
+        core = [c for c in ('open', 'high', 'low', 'close', 'volume') if c in df.columns]
+        return df.dropna(subset=core) if core else df
+
     def _save_kline_cache(self, sym: str, df: pd.DataFrame):
         path = self._kline_path(sym)
         if path.exists():
@@ -186,7 +205,7 @@ class LayeredDataSource:
                 df = pd.concat([old, df]).drop_duplicates(subset='date').sort_values('date')
             except Exception:
                 pass
-        df.to_parquet(path, index=False)
+        self._complete_rows(df).to_parquet(path, index=False)
 
     @staticmethod
     def _merge_kline(a: Optional[pd.DataFrame], b: Optional[pd.DataFrame]) -> pd.DataFrame:
@@ -195,12 +214,14 @@ class LayeredDataSource:
         if b is None or b.empty:
             return a
         merged = pd.concat([a, b]).drop_duplicates(subset='date').sort_values('date')
-        return merged.reset_index(drop=True)
+        return LayeredDataSource._complete_rows(merged).reset_index(drop=True)
 
-    def _missing_after(self, results, start, end) -> Dict[str, List[tuple]]:
+    def _missing_after(self, results, symbols, start, end) -> Dict[str, List[tuple]]:
+        """按请求符号清单重算缺口（DB整批失败时符号不在results，也必须保留缺口供③客户端兜底）"""
         gaps_map = {}
-        for sym, df in results.items():
-            if df.empty:
+        for sym in symbols:
+            df = results.get(sym)
+            if df is None or df.empty:
                 gaps_map[sym] = [(start, end)]
                 continue
             gaps = []
@@ -230,11 +251,14 @@ class LayeredDataSource:
                 chunk = symbols[i:i + 500]
                 placeholders = ",".join(f":s{j}" for j in range(len(chunk)))
                 binds = {f"s{j}": s for j, s in enumerate(chunk)}
+                # close=不复权真实市场价（实盘成交/成本/止损用）；adjclose=前复权（回测跨除权收益用）
                 sql = f"""
                     SELECT S_INFO_WINDCODE AS sym, TRADE_DT AS dt,
-                           CAST(S_DQ_ADJOPEN AS FLOAT), CAST(S_DQ_ADJHIGH AS FLOAT),
-                           CAST(S_DQ_ADJLOW AS FLOAT), CAST(S_DQ_ADJCLOSE AS FLOAT),
-                           CAST(S_DQ_VOLUME AS FLOAT)
+                           CAST(S_DQ_OPEN AS FLOAT), CAST(S_DQ_HIGH AS FLOAT),
+                           CAST(S_DQ_LOW AS FLOAT), CAST(S_DQ_CLOSE AS FLOAT),
+                           CAST(S_DQ_VOLUME AS FLOAT) * 100,
+                           CAST(S_DQ_AMOUNT AS FLOAT) * 1000,
+                           CAST(S_DQ_ADJCLOSE AS FLOAT)
                     FROM AShareEODPrices
                     WHERE S_INFO_WINDCODE IN ({placeholders})
                       AND TRADE_DT >= :start_dt AND TRADE_DT <= :end_dt
@@ -243,18 +267,20 @@ class LayeredDataSource:
                 binds.update({'start_dt': s_dt, 'end_dt': e_dt})
                 cur.execute(sql, binds)
                 rows = cur.fetchall()
-                cols = ['sym', 'date', 'open', 'high', 'low', 'close', 'volume']
+                cols = ['sym', 'date', 'open', 'high', 'low', 'close',
+                        'volume', 'amount', 'adjclose']
                 big = pd.DataFrame(rows, columns=cols)
                 if big.empty:
                     continue
                 for sym, g in big.groupby('sym'):
                     g = g.copy()
                     g['date'] = pd.to_datetime(g['date'], format='%Y%m%d')
-                    for f in KLINE_FIELDS:
+                    for f in KLINE_COLS_ORDER[1:]:
                         g[f] = pd.to_numeric(g[f], errors='coerce')
                     out[sym] = g[KLINE_COLS_ORDER].reset_index(drop=True)
                 logger.info(f"[layered] DB K线 chunk {i//500 + 1}: 累计 {len(out)} 只")
             # 指数（如 000300.SH）不在个股表，从 AIndexEODPrices 补
+            # 注意：指数表无 S_DQ_ADJ* 列（此前沿用个股列名导致 ORA-00942/00904）
             idx_syms = [s for s in symbols if s not in out]
             for i in range(0, len(idx_syms), 100):
                 chunk = idx_syms[i:i + 100]
@@ -262,9 +288,11 @@ class LayeredDataSource:
                 binds = {f"s{j}": s for j, s in enumerate(chunk)}
                 sql = f"""
                     SELECT S_INFO_WINDCODE AS sym, TRADE_DT AS dt,
-                           CAST(S_DQ_ADJOPEN AS FLOAT), CAST(S_DQ_ADJHIGH AS FLOAT),
-                           CAST(S_DQ_ADJLOW AS FLOAT), CAST(S_DQ_ADJCLOSE AS FLOAT),
-                           CAST(S_DQ_VOLUME AS FLOAT)
+                           CAST(S_DQ_OPEN AS FLOAT), CAST(S_DQ_HIGH AS FLOAT),
+                           CAST(S_DQ_LOW AS FLOAT), CAST(S_DQ_CLOSE AS FLOAT),
+                           CAST(S_DQ_VOLUME AS FLOAT) * 100,
+                           CAST(S_DQ_AMOUNT AS FLOAT) * 1000,
+                           CAST(S_DQ_CLOSE AS FLOAT)
                     FROM AIndexEODPrices
                     WHERE S_INFO_WINDCODE IN ({placeholders})
                       AND TRADE_DT >= :start_dt AND TRADE_DT <= :end_dt
@@ -274,13 +302,13 @@ class LayeredDataSource:
                 rows = cur.fetchall()
                 if not rows:
                     continue
-                big = pd.DataFrame(rows, columns=['sym', 'date'] + KLINE_FIELDS)
+                big = pd.DataFrame(rows, columns=['sym', 'date'] + KLINE_FIELDS + ['amount', 'adjclose'])
                 for sym, g in big.groupby('sym'):
                     g = g.copy()
                     g['date'] = pd.to_datetime(g['date'], format='%Y%m%d')
-                    for f in KLINE_FIELDS:
+                    for f in KLINE_COLS_ORDER[1:]:
                         g[f] = pd.to_numeric(g[f], errors='coerce')
-                    out[sym] = g[['date'] + KLINE_FIELDS].reset_index(drop=True)
+                    out[sym] = g[KLINE_COLS_ORDER].reset_index(drop=True)
             if idx_syms:
                 logger.info(f"[layered] DB 指数补齐 {len([s for s in idx_syms if s in out])}/{len(idx_syms)}")
         except Exception as e:
@@ -457,4 +485,4 @@ class LayeredDataSource:
         return []
 
 
-KLINE_COLS_ORDER = ['date', 'open', 'high', 'low', 'close', 'volume']
+KLINE_COLS_ORDER = ['date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'adjclose']

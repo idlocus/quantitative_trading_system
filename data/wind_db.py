@@ -94,7 +94,8 @@ class WindDBDataSource:
         return pd.DataFrame()
 
     def _get_ashare_kline(self, symbol: str, start: date, end: date) -> pd.DataFrame:
-        """从 ASHAREEODPRICES 获取 K线"""
+        """从 ASHAREEODPRICES 获取 K线（单位归一化与 LayeredDataSource 同口径：
+        volume×100（手→股）、amount×1000（千元→元），见 trading/config 单位说明）"""
         try:
             sql = """
                 SELECT
@@ -103,7 +104,8 @@ class WindDBDataSource:
                     CAST(S_DQ_ADJHIGH  AS FLOAT)          AS h,
                     CAST(S_DQ_ADJLOW   AS FLOAT)          AS l,
                     CAST(S_DQ_ADJCLOSE AS FLOAT)          AS c,
-                    CAST(S_DQ_VOLUME   AS FLOAT)          AS v
+                    CAST(S_DQ_VOLUME   AS FLOAT) * 100    AS v,
+                    CAST(S_DQ_AMOUNT   AS FLOAT) * 1000   AS amt
                 FROM AShareEODPrices
                 WHERE S_INFO_WINDCODE = :symbol
                   AND TRADE_DT >= :start_dt
@@ -123,15 +125,22 @@ class WindDBDataSource:
                 return pd.DataFrame()
             df = pd.DataFrame(rows, columns=cols)
             df.rename(columns={'dt': 'date', 'o': 'open', 'h': 'high',
-                               'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
+                               'l': 'low', 'c': 'close', 'v': 'volume',
+                               'amt': 'amount'}, inplace=True)
             df['date'] = pd.to_datetime(df['date'], format="%Y%m%d")
-            return df[["date", "open", "high", "low", "close", "volume"]]
+            return df[["date", "open", "high", "low", "close", "volume", "amount"]]
         except Exception as e:
             logger.debug(f"ASHAREEODPRICES no data for {symbol}: {e}")
             return pd.DataFrame()
 
     def _get_hkshare_kline(self, symbol: str, start: date, end: date) -> pd.DataFrame:
-        """从 HKSHAREEODPRICES 获取 K线（复权）"""
+        """从 HKSHAREEODPRICES 获取 K线（复权）。
+
+        单位说明（2026-10-12）：港股不在主链（price_limit 返回 None、无流动性过滤），
+        S_DQ_VOLUME/S_DQ_AMOUNT 的原表单位未验证——amount 原样直通不做换算，
+        列结构与 A 股路径对齐（含 amount 列）。若未来接入港股主链，必须先实证
+        单位并在 data/turnover.py 统一口径，禁止直接进入成交额计算。
+        """
         try:
             sql = """
                 SELECT
@@ -140,7 +149,8 @@ class WindDBDataSource:
                     CAST(S_DQ_ADJHIGH  AS FLOAT)          AS h,
                     CAST(S_DQ_ADJLOW   AS FLOAT)          AS l,
                     CAST(S_DQ_ADJCLOSE AS FLOAT)          AS c,
-                    CAST(S_DQ_VOLUME   AS FLOAT)          AS v
+                    CAST(S_DQ_VOLUME   AS FLOAT)          AS v,
+                    CAST(S_DQ_AMOUNT   AS FLOAT)          AS amt
                 FROM HKSHAREEODPRICES
                 WHERE S_INFO_WINDCODE = :symbol
                   AND TRADE_DT >= :start_dt
@@ -160,9 +170,10 @@ class WindDBDataSource:
                 return pd.DataFrame()
             df = pd.DataFrame(rows, columns=cols)
             df.rename(columns={'dt': 'date', 'o': 'open', 'h': 'high',
-                               'l': 'low', 'c': 'close', 'v': 'volume'}, inplace=True)
+                               'l': 'low', 'c': 'close', 'v': 'volume',
+                               'amt': 'amount'}, inplace=True)
             df['date'] = pd.to_datetime(df['date'], format="%Y%m%d")
-            return df[["date", "open", "high", "low", "close", "volume"]]
+            return df[["date", "open", "high", "low", "close", "volume", "amount"]]
         except Exception as e:
             logger.error(f"Failed to fetch HK kline for {symbol}: {e}")
             return pd.DataFrame()

@@ -35,14 +35,15 @@ class TestPaperBroker:
 
     def test_limit_up_rejects_buy(self):
         b = PaperBroker()
-        fills = b.execute([Order('A', 'BUY', 0.1, amount=10000)],
-                          {'A': 11.0}, date(2026, 10, 8), prev_prices={'A': 10.0})
+        fills = b.execute([Order('600000.SH', 'BUY', 0.1, amount=10000)],
+                          {'600000.SH': 11.0}, date(2026, 10, 8),
+                          prev_prices={'600000.SH': 10.0})
         assert '涨停' in fills[0].status
 
     def test_zero_qty_rejected(self):
         b = PaperBroker()
         fills = b.execute([Order('A', 'BUY', 0.1, amount=10)], {'A': 100.0}, date(2026, 10, 8))
-        assert '不足一手' in fills[0].status
+        assert '不足最低申报' in fills[0].status
 
 
 class TestLedger:
@@ -98,3 +99,65 @@ class TestOrders:
         sells = [o for o in orders if o.side == 'SELL']
         buys = [o for o in orders if o.side == 'BUY']
         assert len(sells) == 3 and len(buys) == 3
+
+
+class TestLedgerOversellGuard:
+    """超额卖出防线：卖量>持仓 → 阻止入账（现金不凭空增加）+ 记异常队列待人工核对"""
+
+    def _ledger_with_position(self, tmp_path, qty=1000):
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(1_000_000)
+        led.apply_fills([Fill(Order('A', 'BUY', 1.0, quantity=qty), price=10.0,
+                              quantity=qty, commission=0, taxes=0,
+                              trade_date=date(2026, 10, 8))])
+        return led
+
+    def test_oversell_blocked_and_recorded(self, tmp_path):
+        led = self._ledger_with_position(tmp_path, qty=1000)
+        cash_before = led.cash
+        oversell = Fill(Order('A', 'SELL', 0, quantity=1500), price=10.0,
+                        quantity=1500, commission=0, taxes=0,
+                        trade_date=date(2026, 10, 12))
+        booked, dupes, blocked = led.apply_fills([oversell])
+        assert blocked == [oversell] and booked == [] and dupes == []
+        # 现金不变、持仓不变（不再出现负持仓被清除+现金虚增）
+        assert led.cash == cash_before
+        assert led.positions['A'] == 1000
+        # 异常队列记录
+        exs = led.open_exceptions()
+        assert len(exs) == 1
+        assert exs[0]['type'] == 'oversell' and exs[0]['quantity'] == 1500
+        assert exs[0]['holding'] == 1000 and exs[0]['status'] == 'open'
+
+    def test_exact_position_sell_still_works(self, tmp_path):
+        led = self._ledger_with_position(tmp_path, qty=1000)
+        booked, _, blocked = led.apply_fills([
+            Fill(Order('A', 'SELL', 0, quantity=1000), price=10.0, quantity=1000,
+                 commission=0, taxes=0, trade_date=date(2026, 10, 12))])
+        assert len(booked) == 1 and blocked == []
+        assert 'A' not in led.positions
+        assert led.open_exceptions() == []
+
+    def test_sequential_sell_then_oversell(self, tmp_path):
+        """合法卖300后再卖800（余700）→ 第二笔被阻止"""
+        led = self._ledger_with_position(tmp_path, qty=1000)
+        f1 = Fill(Order('A', 'SELL', 0, quantity=300), price=10.0, quantity=300,
+                  commission=0, taxes=0, trade_date=date(2026, 10, 12))
+        f2 = Fill(Order('A', 'SELL', 0, quantity=800), price=10.0, quantity=800,
+                  commission=0, taxes=0, trade_date=date(2026, 10, 12))
+        booked, _, blocked = led.apply_fills([f1, f2])
+        assert len(booked) == 1 and len(blocked) == 1
+        assert led.positions['A'] == 700
+        assert len(led.open_exceptions()) == 1
+
+    def test_exceptions_persist_and_resolvable(self, tmp_path):
+        led = self._ledger_with_position(tmp_path, qty=100)
+        led.apply_fills([Fill(Order('A', 'SELL', 0, quantity=200), price=10.0,
+                              quantity=200, commission=0, taxes=0,
+                              trade_date=date(2026, 10, 12))])
+        # 重载（持久化）
+        led2 = Ledger(led.path)
+        assert len(led2.open_exceptions()) == 1
+        led2.resolve_exception(0, note='重复回报，已核实')
+        assert led2.open_exceptions() == []
+        assert led2.exceptions()[0]['status'] == 'resolved'

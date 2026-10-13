@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""五因子消融(-leverage)：4因子基线 vs +低杠杆因子，两年代（验收通过的因子组合级复检）"""
+"""[已废弃 2026-10-12] 旧语义消融脚本——其保存名与主链 v5 工件同名，重跑会覆盖！
+新主链工件一律由 experiments/mainchain_v5.py 生成（T-1信号/流动性/ST/缓冲带/
+风控闸门/正确成交额单位）。本脚本仅作历史参考，保存名已改为 legacy 前缀防误覆盖。"""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import date
@@ -45,7 +47,7 @@ def main():
             b = bt.close_mx[BENCH].loc[r.equity_curve.index].ffill()
             extra = {'benchmark_series': {'dates': [str(d)[:10] for d in b.index],
                      'values': [round(float(v/b.iloc[0]*r.initial_capital),2) for v in b.values]}}
-            save_artifact('portfolio', f'composite_v5_{era}_{label[:4]}',
+            save_artifact('portfolio', f'legacy_ablation_{era}_{label[:4]}',
                           portfolio_payload(r, label=label, extra=extra))
             print(f"  {label}: {r.total_return:+.1%} 基准{r.benchmark_return:+.1%} 夏普{r.sharpe:.2f}", flush=True)
 
