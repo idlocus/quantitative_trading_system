@@ -74,9 +74,12 @@ class JournalWriter:
                                bench_df=bench_cache.get('000300.SH'), as_of=prev_trading,
                                st_data_ok=psig.st_ok)
 
+        spec_str = getattr(psig, 'spec', None)
+        spec_line = spec_str.summary() if spec_str else "未知版本"
         lines += ["## 三、盘前决策依据", "",
-                  f"- 生产信号：质量过滤+价值合成+趋势(0.2) Top{self.top_n}，"
-                  f"基于 {prev_trading} 收盘（T-1信号，今日执行）",
+                  f"- 策略版本：{spec_line}",
+                  f"- 基于口径：{getattr(psig, 'signal_date', prev_trading)} 收盘"
+                  f"（T-1信号，今日执行）",
                   f"- 目标持仓 {len(targets)} 只；调仓指令 {len(orders)} 条"
                   f"（缓冲带20%，无漂移则零调仓）", ""]
 

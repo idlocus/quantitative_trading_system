@@ -112,7 +112,7 @@ def build_meta(formal: bool = False) -> dict:
 
 def save_artifact(kind: str, name: str, payload: dict, formal: bool = False) -> str:
     """
-    保存研究工件 JSON（自动注入完整版本元数据）
+    保存研究工件 JSON（自动注入完整版本元数据+策略规格）
 
     Args:
         kind: 'portfolio' | 'factor' | 'walkforward'
@@ -125,11 +125,14 @@ def save_artifact(kind: str, name: str, payload: dict, formal: bool = False) -> 
         保存路径
     """
     os.makedirs(DATA_DIR, exist_ok=True)
-    # 自动注入版本元数据（代码版本、dirty状态、diff hash、依赖版本、负载hash）
-    if '_meta' not in payload:
+    # 注入策略规格（版本治理：每个工件可回答"哪个版本产生的"）
+    from trading.spec import attach_spec_to_artifact
+    payload = attach_spec_to_artifact(payload)
+    # 注入版本元数据（代码版本、dirty状态、diff hash、依赖版本、负载hash）
+    if '_meta' not in payload or 'code_version' not in payload.get('_meta', {}):
         meta = build_meta(formal=formal)
         meta['payload_hash'] = _payload_hash(payload)
-        payload['_meta'] = meta
+        payload['_meta'].update(meta)
     path = os.path.join(DATA_DIR, f"{kind}_{name}.json")
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(_jsonable(payload), f, ensure_ascii=False)

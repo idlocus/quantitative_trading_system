@@ -270,6 +270,7 @@ class ProductionSignal:
     st_ok: bool = True
     st_symbols: set = None          # 信号日(T-1) ST集合（选股过滤用）
     exec_st_symbols: set = None     # 执行日(T) ST集合（撮合判定用）
+    spec: object = None             # StrategySpec（版本治理：本次信号使用的策略版本）
 
     def __post_init__(self):
         if self.st_symbols is None:
@@ -311,9 +312,11 @@ def generate_production_signal(ds: LayeredDataSource, as_of: date = None,
     # st_ok=True 的假象下漏过滤（状态失真）。
     kwargs = {'st_syms': st_syms_sig} if st_ok else {}
     targets, scores = generate_target(ds, sig_date, top_n=top_n, **kwargs)
+    from trading.spec import StrategySpec
     return ProductionSignal(targets=targets, scores=scores, signal_date=sig_date,
                             st_ok=st_ok, st_symbols=st_syms_sig,
-                            exec_st_symbols=st_syms_exec)
+                            exec_st_symbols=st_syms_exec,
+                            spec=StrategySpec.current())
 
 
 def illiquid_set(cache: Dict, as_of: pd.Timestamp,
