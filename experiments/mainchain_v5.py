@@ -33,18 +33,10 @@ BENCHES = ['000300.SH', '000905.SH', '000852.SH']
 
 
 def build_score(ds, pool, d0, d1):
-    prov = WindFundamentalProvider(ds)
-    pit = PITFinancialProvider(ds)
-    mats = {}
-    for f in ['ep', 'bp', 'sp', 'size']:
-        fm = build_fundamental_matrix(prov, f, pool, d0, d1)
-        if not fm.empty:
-            mats[f] = fm.loc[pd.Timestamp(d0):pd.Timestamp(d1)]
-    lev = pit.get_factor_matrix('leverage', pool, d0, d1)
-    if not lev.empty:
-        lev = lev.loc[pd.Timestamp(d0):pd.Timestamp(d1)]
-        mats['leverage'] = lev
-    return composite_from_matrices(mats, directions=D5)
+    """唯一策略实现：经由 strategy.build（生产/重放/实验共用）"""
+    from trading.strategy import build_strategy_score
+    score, _, _ = build_strategy_score(ds, pool, d0, d1)
+    return score
 
 
 def bench_series_payload(bt, result):

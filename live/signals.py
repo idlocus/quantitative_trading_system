@@ -49,33 +49,18 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     start = as_of - timedelta(days=WARMUP_DAYS)
     pool = sorted(ds.list_symbols(as_of=as_of))
 
-    loader_mod = _make_loader(ds)
-    cache = loader_mod.preload_klines(pool, start, as_of)._cache
-    prov = WindFundamentalProvider(ds)
-    pit = PITFinancialProvider(ds)
+    # 唯一策略实现：经由 strategy.build（生产/重放/实验共用）
+    from trading.strategy import build_strategy_score
+    score_mx, cache, mats = build_strategy_score(ds, pool, start, as_of)
 
-    mats = {}
-    for f in ['ep', 'bp', 'sp']:    # v2: 价值合成（去掉size/leverage权重）
-        fm = build_fundamental_matrix(prov, f, pool, start, as_of)
-        if not fm.empty:
-            # 契约校验：单位/值域/覆盖率（未注册因子拒绝使用）
-            from data.contracts import validate_factor_matrix, get_factor_contract
-            try:
-                contract = get_factor_contract(f)
-                meta = validate_factor_matrix(fm, contract)
-                if not meta['passed']:
-                    logger.warning(f"[signal] 因子'{f}'契约校验未通过: {meta['issues']}")
-            except Exception as e:
-                logger.warning(f"[signal] 因子'{f}'契约校验异常: {e}")
-            mats[f] = fm
-
-    score_mx = composite_from_matrices(mats, directions=PRODUCTION_FACTORS)
     if score_mx.empty:
         return [], pd.Series(dtype=float)
     ts = pd.Timestamp(as_of)
     valid_dates = score_mx.index[score_mx.index <= ts]
     if len(valid_dates) == 0:
         return [], pd.Series(dtype=float)
+    # 保留mats供单因子覆盖率检查（来自 strategy.build 的原始因子矩阵）
+    # 契约校验已在 build_strategy_score 内完成
 
     # ---- 信号质量闸门（数据停机保护）----
     # 回退到最后所有因子覆盖率均达标且综合分有效的日期
