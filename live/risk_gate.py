@@ -173,6 +173,14 @@ class RiskGate:
         """
         as_of = as_of or date.today()
         d = RiskDecision()
+
+        # Kill Switch：一键停止一切交易（最高优先级，人工激活/解除）
+        from scripts.kill_switch import is_killed
+        if is_killed():
+            d.action = 'halt'
+            d.data_issues.append('人工停止交易（runtime/KILL 存在）——所有指令拦截')
+            return d
+
         self._stale = stale_symbols or set()
 
         # L2 数据停机（最高优先级：数据不可信 → 一律不动）
