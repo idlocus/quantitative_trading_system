@@ -78,25 +78,56 @@ def generate_target(ds: LayeredDataSource, as_of: date,
         return [], pd.Series(dtype=float)
 
     # ---- 信号质量闸门（数据停机保护）----
-    # 回退到最后有非NaN分数且覆盖率≥30%的日期（估值表滞后/空行/覆盖率崩塌保护）
+    # 回退到最后所有因子覆盖率均达标且综合分有效的日期
+    # （此前只查综合分覆盖率——单因子缺失被重新加权掩盖）
     from research.factor_eval import FactorEvaluator
+    from data.semantics import factor_coverage
     ev = FactorEvaluator(cache)
     scores = pd.Series(dtype=float)
     sig_date = valid_dates[-1]
+    required_factors = set(PRODUCTION_FACTORS.keys())
     for dt in reversed(valid_dates[-10:]):
-        from data.semantics import factor_coverage
+        # 1. 综合分覆盖率
         coverage = factor_coverage(score_mx, dt)
         n_valid = int(score_mx.loc[dt].notna().sum())
-        if n_valid > 10 and coverage >= MIN_FACTOR_COVERAGE and dt in ev.close_mx.index:
-            scores = score_mx.loc[dt].dropna()
-            sig_date = dt
-            break
+        if n_valid <= 10 or coverage < MIN_FACTOR_COVERAGE or dt not in ev.close_mx.index:
+            continue
+
+        # 2. 单因子覆盖率（任一必需因子缺失→该日期不可用）
+        factor_ok = True
+        for fname, fm in mats.items():
+            if fname not in required_factors or fm.empty:
+                continue
+            if dt not in fm.index:
+                factor_ok = False
+                logger.warning(f"[signal] 因子'{fname}'在{dt.date()}无数据")
+                break
+            f_cov = factor_coverage(fm, dt)
+            if f_cov < MIN_FACTOR_COVERAGE:
+                factor_ok = False
+                logger.warning(f"[signal] 因子'{fname}'覆盖率{f_cov:.0%}<{MIN_FACTOR_COVERAGE:.0%}"
+                               f"@{dt.date()}——该日期不可用（防止单因子崩塌被重新加权掩盖）")
+                break
+        if not factor_ok:
+            continue
+
+        scores = score_mx.loc[dt].dropna()
+        sig_date = dt
+        break
+
     if len(scores) == 0:
-        logger.error(f"[signal] 因子覆盖率崩塌：最近10日覆盖率均<{MIN_FACTOR_COVERAGE}，"
-                     f"进入数据停机（禁止交易——防止数据故障被当成正常调仓）")
+        fail_reasons = []
+        for fname in required_factors:
+            fm = mats.get(fname)
+            if fm is not None and not fm.empty:
+                last_cov = factor_coverage(fm, fm.index[-1])
+                fail_reasons.append(f"{fname}:{last_cov:.0%}")
+        logger.error(f"[signal] 信号质量闸门：最近10日无合格日期"
+                     f"（综合分或单因子覆盖率不足。各因子最新覆盖率: {', '.join(fail_reasons)}），"
+                     f"进入数据停机（禁止交易）")
         return [], pd.Series(dtype=float)
     logger.info(f"[signal] 信号日期: {sig_date.date()}（有效{len(scores)}/"
-                f"{score_mx.shape[1]}只）")
+                f"{score_mx.shape[1]}只，单因子覆盖均已检查）")
 
     # 排除当日无价格（停牌）——用缓存尾部判断
     from research.factor_eval import FactorEvaluator
