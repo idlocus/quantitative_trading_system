@@ -293,6 +293,7 @@ class Reconciler:
         不自动处理：分红送转（需显式 CLI 指令）、trade_missing_broker（人工核查）
         """
         actions = []
+        fills = []  # 必须在开头初始化（此前仅在有漏记成交时赋值，无成交差异时UnboundLocalError）
         as_of = stmt.as_of
 
         # 1) 补记券商成交（先补成交，再对齐数量/现金，避免双重修正）

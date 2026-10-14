@@ -35,24 +35,27 @@ from trading import config as chain
 
 
 def build_score_matrix(ds, pool, start, end):
-    """生产5因子矩阵（与 live/signals.generate_target 同构造）"""
+    """生产v2策略分数（与 live/signals 同逻辑：质量过滤+价值+动量——禁止分叉）"""
+    from experiments.quality_value_candidate import (
+        build_value_score, build_quality_filter, apply_quality_filter)
+    from experiments.momentum_overlay import build_momentum_matrix, combine_value_momentum
+
     loader = _make_loader(ds)
     cache = loader.preload_klines(pool, start, end)._cache
-    prov = WindFundamentalProvider(ds)
-    pit = PITFinancialProvider(ds)
 
-    mats = {}
-    for f in ['ep', 'bp', 'sp', 'size']:
-        fm = build_fundamental_matrix(prov, f, pool, start, end)
-        if not fm.empty:
-            mats[f] = fm
-    lev = pit.get_factor_matrix('leverage', pool, start, end)
-    if not lev.empty:
-        mats['leverage'] = lev
-    score_mx = composite_from_matrices(mats, directions=chain.PRODUCTION_FACTORS)
-    # 分数列 ∩ K线池：选股只能在有行情的池内（否则闸门价格覆盖检查必然停机）
-    score_mx = score_mx[score_mx.columns.intersection(cache.keys())]
-    return score_mx, cache
+    # 价值合成（仅 PRODUCTION_FACTORS 声明的因子）
+    score = build_value_score(ds, pool, start, end)
+    score = score[score.columns.intersection(cache.keys())]
+
+    # 质量过滤（ROE>8% + D/E<65%）
+    quality = build_quality_filter(ds, pool, start, end)
+    score = apply_quality_filter(score, quality)
+
+    # 趋势叠加（6个月剔1个月 × MOMENTUM_WEIGHT）
+    momentum = build_momentum_matrix(cache, start, end)
+    score = combine_value_momentum(score, momentum, chain.MOMENTUM_WEIGHT)
+
+    return score, cache
 
 
 def main():

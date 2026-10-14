@@ -101,21 +101,21 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     # 排除当日无价格（停牌）——用缓存尾部判断
     from research.factor_eval import FactorEvaluator
     ev = FactorEvaluator(cache)
-    last_prices = ev.close_mx.loc[valid_dates[-1]] if len(valid_dates) else pd.Series()
+    # 所有过滤统一使用 sig_date（信号回退后valid_dates[-1]≠sig_date，
+    # 此前混用导致因子来自旧日期但过滤来自新日期——前视风险）
+    last_prices = ev.close_mx.loc[sig_date] if sig_date in ev.close_mx.index else pd.Series()
     tradable = last_prices.dropna()
     scores = scores[scores.index.intersection(tradable.index)]
 
     # 上市天数过滤：需≥60个交易日数据（与回测一致）
-    # 新上市股票波动大、无足够历史计算因子
     data_age = ev.close_mx.notna().cumsum()
-    if len(valid_dates) > 0:
-        age_today = data_age.loc[valid_dates[-1]]
+    if sig_date in data_age.index:
+        age_today = data_age.loc[sig_date]
         eligible = age_today[age_today >= MIN_LISTING_DAYS].index
         scores = scores[scores.index.intersection(eligible)]
 
-    # 流动性过滤：20日均成交额≥500万（与回测 _liquidity_mask 同口径；
-    # 此前生产缺失此过滤=跑回测未验证的池子）
-    illiquid = illiquid_set(cache, ts, MIN_DAILY_TURNOVER)
+    # 流动性过滤：20日均成交额≥500万（与回测同口径；日期也统一用sig_date）
+    illiquid = illiquid_set(cache, sig_date, MIN_DAILY_TURNOVER)
     if illiquid:
         scores = scores[~scores.index.isin(illiquid)]
 
@@ -202,9 +202,10 @@ def generate_target(ds: LayeredDataSource, as_of: date,
 
     targets = scores.sort_values(ascending=False).head(top_n).index.tolist()
 
-    # 目标数量下限检查（数据停机保护：100→7只不是正常调仓）
-    if len(targets) < MIN_TARGET_COUNT:
-        logger.error(f"[signal] 目标持仓仅{len(targets)}只（下限{MIN_TARGET_COUNT}），"
+    # 目标数量下限检查（数据停机保护：不能超过top_n本身）
+    effective_min = min(MIN_TARGET_COUNT, top_n)
+    if len(targets) < effective_min:
+        logger.error(f"[signal] 目标持仓仅{len(targets)}只（下限{effective_min}），"
                      f"数据链路异常——返回空目标（闸门将halt，保留原持仓）")
         return [], scores
 
