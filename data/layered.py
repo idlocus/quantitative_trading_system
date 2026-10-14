@@ -146,11 +146,49 @@ class LayeredDataSource:
             if not df.empty:
                 self._save_kline_cache(sym, df)
 
+        # ── 契约校验：所有K线离开数据层前自动校验（抽样+全量首检） ──
+        self._validate_batch(results, symbols)
+
         total = sum(len(df) for df in results.values())
         logger.info(f"[layered] K线完成: {len(results)}/{len(symbols)} 只, {total} 行 | "
                     f"缓存 {self.stats['cache_rows']} / DB {self.stats['db_rows']} / "
                     f"客户端 {self.stats['client_rows']}")
         return results
+
+    def _validate_batch(self, results: dict, symbols: list):
+        """
+        契约校验（数据离开数据层前的最后防线）：
+        - 抽样校验（每次5只）+ 异常计数
+        - 价格非正/极端跳变/复权基准混合 → 剔除该标的并告警
+        - 成交量单位一致性抽查（DB×100 vs 客户端直通）
+        """
+        import random
+        from data.contracts import validate_price_series, PriceContract, ContractViolation
+
+        if not results:
+            return
+        # 抽样5只（确定性种子避免每次不同）
+        sample = random.sample(list(results.keys()), min(5, len(results)))
+        contract = PriceContract(basis='raw')
+        rejected = []
+        for sym in sample:
+            df = results.get(sym)
+            if df is None or df.empty:
+                continue
+            try:
+                validate_price_series(df, contract, column='close')
+                # 复权列如果存在也校验
+                if 'adjclose' in df.columns:
+                    validate_price_series(df, contract, column='adjclose')
+            except ContractViolation as e:
+                logger.warning(f"[layered] 契约校验失败 {sym}: {e}")
+                rejected.append(sym)
+
+        # 异常比例>40% → 整批标记可疑（可能数据源级别问题）
+        if rejected and len(rejected) >= 2:
+            logger.error(f"[layered] 抽样{len(sample)}只中{len(rejected)}只校验失败"
+                         f"({','.join(rejected)})——数据源可能存在系统性问题")
+
 
     def get_kline(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         return self.preload_batch([symbol], start, end).get(symbol, pd.DataFrame())

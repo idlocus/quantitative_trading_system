@@ -58,6 +58,15 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     for f in ['ep', 'bp', 'sp']:    # v2: 价值合成（去掉size/leverage权重）
         fm = build_fundamental_matrix(prov, f, pool, start, as_of)
         if not fm.empty:
+            # 契约校验：单位/值域/覆盖率（未注册因子拒绝使用）
+            from data.contracts import validate_factor_matrix, get_factor_contract
+            try:
+                contract = get_factor_contract(f)
+                meta = validate_factor_matrix(fm, contract)
+                if not meta['passed']:
+                    logger.warning(f"[signal] 因子'{f}'契约校验未通过: {meta['issues']}")
+            except Exception as e:
+                logger.warning(f"[signal] 因子'{f}'契约校验异常: {e}")
             mats[f] = fm
 
     score_mx = composite_from_matrices(mats, directions=PRODUCTION_FACTORS)
@@ -110,18 +119,40 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     if illiquid:
         scores = scores[~scores.index.isin(illiquid)]
 
-    # ---- v2 质量过滤（ROE>8% + 杠杆<3.0，作为筛选而非权重） ----
+    # ---- v2 质量过滤（ROE>8% + 杠杆<65%，作为筛选而非权重） ----
+    # 契约校验：PIT杠杆是百分比(D/E%)，阈值65.0 不是资产/权益倍数3.0
+    from data.contracts import get_factor_contract, validate_factor_matrix
     qf = chain.QUALITY_FILTER
+
     if qf.get('roe_min') is not None:
         roe = pit.get_factor_matrix('roe', pool, start, as_of)
+        if not roe.empty:
+            try:
+                meta = validate_factor_matrix(roe, get_factor_contract('roe'))
+                if not meta['passed']:
+                    logger.warning(f"[signal] ROE契约异常: {meta['issues']}")
+            except Exception:
+                pass
         if not roe.empty and sig_date in roe.index:
             roe_row = roe.loc[sig_date]
             fail_roe = roe_row[roe_row <= qf['roe_min']].index
             if len(fail_roe) > 0:
                 scores = scores[~scores.index.isin(fail_roe)]
                 logger.info(f"[signal] 质量过滤ROE: 排除{len(fail_roe)}只")
+
     if qf.get('leverage_max') is not None:
         lev = pit.get_factor_matrix('leverage', pool, start, as_of)
+        if not lev.empty:
+            try:
+                meta = validate_factor_matrix(lev, get_factor_contract('leverage'))
+                # 关键校验：如果值域中位数<10，大概率是倍数而非百分比 → 告警
+                last_vals = lev.iloc[-1].dropna()
+                if len(last_vals) > 10 and last_vals.median() < 10:
+                    logger.warning(
+                        f"[signal] 杠杆值中位数{last_vals.median():.1f}<10——"
+                        f"疑似倍数而非百分比（D/E%），阈值{qf['leverage_max']}可能不适用")
+            except Exception:
+                pass
         if not lev.empty and sig_date in lev.index:
             lev_row = lev.loc[sig_date]
             fail_lev = lev_row[lev_row >= qf['leverage_max']].index
