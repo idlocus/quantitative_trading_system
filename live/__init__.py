@@ -39,6 +39,16 @@ def make_broker(mode: str, lot_map: dict = None, enforce_window: bool = True):
     if mode == 'paper':
         return PaperBroker(lot_map=lot_map)
     if mode == 'qmt':
+        # 上线状态机闸门：仅 CANARY/LIVE 允许创建 QMT Broker
+        from scripts.deployment import get_deployment_state
+        dep_state = get_deployment_state()
+        if dep_state not in ('CANARY', 'LIVE'):
+            raise RuntimeError(
+                f"部署状态={dep_state}，不允许创建QMT Broker（仅CANARY/LIVE）。\n"
+                f"当前Paper运行正常。如需进入灰度：\n"
+                f"  1. python scripts/preflight_check.py\n"
+                f"  2. python scripts/deployment.py promote --to CANARY --confirm")
+
         env = QMTBroker.check_env()
         if not env['ready']:
             raise RuntimeError(

@@ -40,6 +40,8 @@ class TestMakeBroker:
 
     def test_qmt_env_not_ready_raises_with_guidance(self, monkeypatch):
         """环境不就绪 → RuntimeError 带逐项修复指引（不静默跳过）"""
+        # 绕过部署状态检查（单测不要求CANARY）
+        monkeypatch.setattr('scripts.deployment.get_deployment_state', lambda: 'CANARY')
         monkeypatch.setattr(qmt_mod.QMTBroker, 'check_env',
                             lambda: {'ready': False,
                                      'issues': ['QMT_PATH 未设置', 'xtquant 未安装']})
@@ -49,6 +51,7 @@ class TestMakeBroker:
         assert '不执行任何指令' in str(ei.value)
 
     def test_qmt_env_ready_returns_broker(self, monkeypatch):
+        monkeypatch.setattr('scripts.deployment.get_deployment_state', lambda: 'CANARY')
         monkeypatch.setattr(qmt_mod.QMTBroker, 'check_env',
                             lambda: {'ready': True, 'issues': []})
         b = make_broker('qmt')

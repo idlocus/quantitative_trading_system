@@ -376,9 +376,11 @@ class QMTBroker(Broker):
         price_type = XT['LATEST_PRICE']   # 最新价（接近市价；收盘竞价适用）
         price_val = 0                     # LATEST_PRICE 时 price=0
         try:
+            # 官方API 8参数: account, stock_code, order_type, order_volume,
+            # price_type, price, strategy_name, order_remark
             ack = self._xt_trader.order_stock_async(
                 self._account, order.symbol, direction, qty, price_type,
-                price_val, '', '', '', '', '')
+                price_val, '', '')  # strategy_name='', order_remark=''
         except Exception as e:
             logger.error(f"[QMT] 下单异常 {order.symbol}: {e}")
             return None

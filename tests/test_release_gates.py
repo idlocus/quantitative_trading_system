@@ -209,20 +209,37 @@ class TestSafetyGate:
 # ================= 门槛3：QMT集成 =================
 
 class TestQMTIntegrationGate:
-    """QMT模拟接口：官方签名 + 完整订单生命周期（R4）"""
+    """QMT模拟接口：官方签名 + 完整订单生命周期（R4）——行为测试，非源码检查"""
 
     def test_official_signature_8_params(self):
-        """order_stock_async必须只传8个参数（官方API）"""
+        """order_stock_async 实际调用时参数数量必须≤9（account+8个位置参数）。
+        用mock拦截真实调用并计数——当前11参数调用必须在此失败。"""
         from live import qmt_broker as qb
-        import inspect
-        src = inspect.getsource(qb.QMTBroker._submit_order)
-        # 统计调用中的参数个数
-        assert "order_stock_async" in src
-        # 检查传参（不含self和account）：symbol, direction, qty, price_type, price, strategy, remark
-        # 当前传了11个（含3个空字符串）→ 应该是8个
-        # 这是一个源码级检查，更严格的做法是mock接口并断言参数数量
-        lines = [l.strip() for l in src.split('\n') if 'order_stock_async' in l]
-        assert lines, "_submit_order中缺少order_stock_async调用"
+        import tempfile
+
+        call_args = []
+
+        class MockXt:
+            def order_stock_async(self, *args, **kwargs):
+                call_args.append(args)
+                return 12345  # 模拟请求序号
+
+        b = qb.QMTBroker(
+            state_path=tempfile.mkdtemp() + '/q.json',
+            enforce_window=False, order_timeout=0.1)
+        b._connected = True
+        b._pending = {}
+        b._xt_trader = MockXt()
+
+        from live.broker import Order as O
+        b._submit_order(O('600000.SH', 'BUY', 0.01), 100, 10.0)
+
+        assert call_args, "order_stock_async未被调用"
+        n_args = len(call_args[0])
+        assert n_args <= 9, \
+            f"order_stock_async传了{n_args}个参数（含account）——官方API只接受9个" \
+            f"（account+symbol+direction+qty+price_type+price+strategy+remark+account_id），" \
+            f"当前多传了{n_args - 9}个"
 
     def test_seq_vs_real_order_id_separation(self):
         """请求序号和真实订单号分开存储"""

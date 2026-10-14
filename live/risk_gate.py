@@ -174,12 +174,28 @@ class RiskGate:
         as_of = as_of or date.today()
         d = RiskDecision()
 
-        # Kill Switch：一键停止一切交易（最高优先级，人工激活/解除）
-        from scripts.kill_switch import is_killed
-        if is_killed():
+        # 交易控制三态开关（最高优先级；导入失败时降级为NORMAL）
+        try:
+            from scripts.trading_switch import effective_state
+            _sw = effective_state()
+        except Exception:
+            _sw = 'NORMAL'
+        if _sw == 'HALT_ALL':
             d.action = 'halt'
-            d.data_issues.append('人工停止交易（runtime/KILL 存在）——所有指令拦截')
+            d.data_issues.append('交易控制=HALT_ALL（人工全停）——所有指令拦截')
             return d
+        if _sw == 'CLOSE_ONLY' and d.action not in ('halt',):
+            try:
+                from scripts.trading_switch import allows_buy
+                _can_buy = allows_buy()
+            except Exception:
+                _can_buy = True
+            if not _can_buy:
+                _buys = [o for o in orders if o.side == 'BUY']
+                if _buys:
+                    d.reasons.append(f'[L0] CLOSE_ONLY模式：{len(_buys)}笔买入拦截')
+                    orders = [o for o in orders if o.side != 'BUY']
+            d.reasons.append('[L0] CLOSE_ONLY模式：只卖不买（降风险中）')
 
         self._stale = stale_symbols or set()
 
