@@ -10,7 +10,11 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import os
 from datetime import date, timedelta
+
+_PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_TEST_RG = os.path.join(_PROJECT, "runtime")
 
 import numpy as np
 import pandas as pd
@@ -139,7 +143,7 @@ class TestSafetyGate:
         led = self._make_ledger(None, positions={'S001.SH': 100},
                                  navs=[1_000_000, 950_000])
         orders = [Order('S002.SH', 'BUY', 0.01, amount=5000)]
-        d = RiskGate(state_path='/tmp/_rg1.json').review(
+        d = RiskGate(state_path=os.path.join(_TEST_RG, 'test_rg1.json')).review(
             orders, led, {'S001.SH': 10.0, 'S002.SH': 10.0},
             {'S001.SH': 10.0, 'S002.SH': 10.0}, [],
             bench_df=self._bench(), as_of=date(2026, 9, 3),
@@ -151,7 +155,7 @@ class TestSafetyGate:
         """过期价格标的的指令被剔除"""
         led = self._make_ledger(None, navs=[1_000_000, 950_000])
         orders = [Order('STALE.SH', 'BUY', 0.01, amount=5000)]
-        d = RiskGate(state_path='/tmp/_rg2.json').review(
+        d = RiskGate(state_path=os.path.join(_TEST_RG, 'test_rg2.json')).review(
             orders, led, {'STALE.SH': 10.0}, {'STALE.SH': 10.0}, [],
             bench_df=self._bench(), as_of=date(2026, 9, 3),
             stale_symbols={'STALE.SH'})
@@ -161,7 +165,7 @@ class TestSafetyGate:
         """有持仓但净值基线异常→阻断交易"""
         led = self._make_ledger(None, positions={'S001.SH': 100}, navs=[])
         orders = [Order('S002.SH', 'BUY', 0.01, amount=5000)]
-        d = RiskGate(state_path='/tmp/_rg3.json').review(
+        d = RiskGate(state_path=os.path.join(_TEST_RG, 'test_rg3.json')).review(
             orders, led, {'S001.SH': 10.0, 'S002.SH': 10.0},
             {'S001.SH': 10.0, 'S002.SH': 10.0}, [],
             bench_df=self._bench(), as_of=date(2026, 9, 3))
@@ -174,7 +178,7 @@ class TestSafetyGate:
         led._d['meta']['last_recon'] = {'date': '2026-09-02', 'ok': False, 'n_diffs': 3}
         led.save()
         orders = [Order('S001.SH', 'BUY', 0.01, amount=5000)]
-        d = RiskGate(state_path='/tmp/_rg4.json').review(
+        d = RiskGate(state_path=os.path.join(_TEST_RG, 'test_rg4.json')).review(
             orders, led, {'S001.SH': 10.0}, {'S001.SH': 10.0}, ['S001.SH'],
             bench_df=self._bench(), as_of=date(2026, 9, 3))
         assert d.action == 'no_buy' or d.action == 'halt'
@@ -185,7 +189,7 @@ class TestSafetyGate:
         led._d['meta']['last_recon'] = {'date': '2026-08-01', 'ok': True, 'n_diffs': 0}
         led.save()
         orders = [Order('S001.SH', 'BUY', 0.01, amount=5000)]
-        d = RiskGate(state_path='/tmp/_rg5.json').review(
+        d = RiskGate(state_path=os.path.join(_TEST_RG, 'test_rg5.json')).review(
             orders, led, {'S001.SH': 10.0}, {'S001.SH': 10.0}, ['S001.SH'],
             bench_df=self._bench(), as_of=date(2026, 9, 10))
         assert d.action == 'no_buy' or d.action == 'halt'
@@ -200,7 +204,7 @@ class TestSafetyGate:
         prices['ANOM.SH'] = 13.0  # +30%
         prev['ANOM.SH'] = 10.0
         orders.append(Order('S000.SH', 'BUY', 0.01, amount=5000))
-        d = RiskGate(state_path='/tmp/_rg6.json').review(
+        d = RiskGate(state_path=os.path.join(_TEST_RG, 'test_rg6.json')).review(
             orders, led, prices, prev, list(prices.keys())[:30],
             bench_df=self._bench(), as_of=date(2026, 9, 3))
         assert all(o.symbol != 'ANOM.SH' for o in d.orders)
