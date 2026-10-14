@@ -122,7 +122,8 @@ class JournalWriter:
         as_of = date.today()
         symbols = set(self.ledger.positions) | {f.order.symbol for f in fills}
         prices_today = self._prices(ds, symbols, as_of)
-        prices_prev = self._prices(ds, symbols, am_ctx.get('prev_trading', as_of - timedelta(days=1)))
+        prices_prev = self._prices(ds, symbols,
+                                   am_ctx.get('prev_trading') or (as_of - timedelta(days=1)))
 
         lines = ["---", "", f"*以下为盘后阶段（{as_of} 收盘后生成）*", "",
                  "## 四、成交记录", ""]
