@@ -29,6 +29,9 @@ DEFAULT_TOP_N = chain.TOP_N              # Top100（Top30经回测验证跑输�
 WARMUP_DAYS = chain.WARMUP_DAYS
 MIN_LISTING_DAYS = chain.MIN_LISTING_DAYS
 MIN_DAILY_TURNOVER = chain.MIN_DAILY_TURNOVER  # 20日均成交额下限（与回测同口径）
+# 信号质量闸门（数据停机保护：覆盖率崩塌→halt而非正常调仓）
+MIN_FACTOR_COVERAGE = 0.30       # 核心因子单日覆盖率下限
+MIN_TARGET_COUNT = 20            # 目标持仓下限（<20只视为数据异常）
 
 
 def generate_target(ds: LayeredDataSource, as_of: date,
@@ -67,7 +70,28 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     valid_dates = score_mx.index[score_mx.index <= ts]
     if len(valid_dates) == 0:
         return [], pd.Series(dtype=float)
-    scores = score_mx.loc[valid_dates[-1]].dropna()
+
+    # ---- 信号质量闸门（数据停机保护）----
+    # 回退到最后有非NaN分数且覆盖率≥30%的日期（估值表滞后/空行/覆盖率崩塌保护）
+    from research.factor_eval import FactorEvaluator
+    ev = FactorEvaluator(cache)
+    scores = pd.Series(dtype=float)
+    sig_date = valid_dates[-1]
+    total_syms = max(score_mx.shape[1], 1)
+    for dt in reversed(valid_dates[-10:]):
+        row = score_mx.loc[dt]
+        n_valid = row.notna().sum()
+        coverage = n_valid / total_syms
+        if n_valid > 10 and coverage >= MIN_FACTOR_COVERAGE and dt in ev.close_mx.index:
+            scores = row.dropna()
+            sig_date = dt
+            break
+    if len(scores) == 0:
+        logger.error(f"[signal] 因子覆盖率崩塌：最近10日覆盖率均<{MIN_FACTOR_COVERAGE}，"
+                     f"进入数据停机（禁止交易——防止数据故障被当成正常调仓）")
+        return [], pd.Series(dtype=float)
+    logger.info(f"[signal] 信号日期: {sig_date.date()}（覆盖率{len(scores)}/{total_syms}"
+                f"={len(scores)/total_syms:.0%}）")
 
     # 排除当日无价格（停牌）——用缓存尾部判断
     from research.factor_eval import FactorEvaluator
@@ -106,6 +130,13 @@ def generate_target(ds: LayeredDataSource, as_of: date,
         logger.info(f"[signal] ST过滤：剔除 {n_before - len(scores)} 只 @ {as_of}")
 
     targets = scores.sort_values(ascending=False).head(top_n).index.tolist()
+
+    # 目标数量下限检查（数据停机保护：100→7只不是正常调仓）
+    if len(targets) < MIN_TARGET_COUNT:
+        logger.error(f"[signal] 目标持仓仅{len(targets)}只（下限{MIN_TARGET_COUNT}），"
+                     f"数据链路异常——返回空目标（闸门将halt，保留原持仓）")
+        return [], scores
+
     return targets, scores
 
 

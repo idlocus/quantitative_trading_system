@@ -66,11 +66,15 @@ class Ledger:
         return self._d['positions']
 
     def initialize(self, capital: float):
-        """初始入金（仅一次）"""
+        """初始入金（仅一次）——同时建立净值基准（回撤计算的起点）"""
         if self._d['cash'] != 0 or self._d['trades'] or self._d['positions']:
             raise RuntimeError('账本已有资金或交易，不能重新入金')
         self._d['cash'] = float(capital)
         self._log_cash(str(date.today()), 'deposit', float(capital), '初始入金')
+        # 建立净值基准：peak_nav 从初始资金开始，而非从0（0会导致回撤保护静默跳过）
+        self._d['nav_history'].append({
+            'date': str(date.today()), 'nav': round(float(capital), 2),
+            'cash': round(float(capital), 2), 'market_value': 0})
         self.save()
 
     # ---- 成交入账（去重 + 部分成交） ----

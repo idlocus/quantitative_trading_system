@@ -375,6 +375,12 @@ class RiskGate:
                     d.reasons.append(f'[L3熔断] 回撤{dd:.1%}≥软限{cfg.drawdown_soft:.0%} → 仓位上限{exposure:.0%}')
                 else:
                     d.reasons.append(f'[L3] 回撤{dd:.1%}（软限{cfg.drawdown_soft:.0%}/硬限{cfg.drawdown_hard:.0%}）正常')
+            else:
+                # peak_eff<=0：回撤保护不可用（不能静默显示"回撤0.0%"）
+                if hasattr(ledger, 'positions') and ledger.positions:
+                    d.reasons.append('[L3] ⚠️ 有持仓但净值基准异常（peak≤0）——回撤保护不可用')
+                else:
+                    d.reasons.append('[L3] 新账户（无净值历史）——回撤保护待建立')
             # 2) 组合单日暴跌
             if len(navs) >= 2 and navs[-2] > 0:
                 day_ret = navs[-1] / navs[-2] - 1
