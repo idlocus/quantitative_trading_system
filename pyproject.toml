@@ -54,5 +54,8 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v"
+markers = [
+    "release_gate: 发布门槛测试（必须通过才能合并master）",
+]
 # 覆盖率改为显式开启（不阻塞测试可执行性）：
 #   pytest --cov=. --cov-report=term-missing
