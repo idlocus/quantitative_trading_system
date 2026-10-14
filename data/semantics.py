@@ -98,6 +98,19 @@ def avg_daily_turnover(df: pd.DataFrame, window: int = 20) -> Optional[float]:
     return float(tail.mean())
 
 
+def turnover_matrix(close_mx: pd.DataFrame, volume_mx: pd.DataFrame,
+                    amount_mx: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    成交额矩阵（元）：amount优先，退化 close×volume（矩阵级操作）。
+
+    唯一实现：backtester 和 daily_replay 的 20日均成交额计算共用。
+    """
+    fallback = close_mx * volume_mx
+    if amount_mx is not None and not amount_mx.empty:
+        return amount_mx.where(amount_mx > 0).fillna(fallback)
+    return fallback
+
+
 # ================= 信号质量 =================
 
 def factor_coverage(mx: pd.DataFrame, date=None) -> float:

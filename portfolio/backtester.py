@@ -147,13 +147,10 @@ class PortfolioBacktester:
             logger.info("[Risk] 行业集中度约束未启用：未提供 PortfolioConfig.industry_map")
         # 成交量矩阵（用于流动性过滤和冲击成本）
         self.volume_mx = pd.DataFrame(volume).reindex(self.close_mx.index).sort_index()
-        # 20日均成交额（元）：amount列优先（数据层归一化），缺失退化为 close×volume(股)
-        fallback = self.close_mx * self.volume_mx
+        # 20日均成交额（元）：经由 semantics.turnover_matrix 统一口径
+        from data.semantics import turnover_matrix
         amount_mx = pd.DataFrame(amount).reindex(self.close_mx.index).sort_index()
-        if not amount_mx.empty:
-            turnover_src = amount_mx.where(amount_mx > 0).fillna(fallback)
-        else:
-            turnover_src = fallback
+        turnover_src = turnover_matrix(self.close_mx, self.volume_mx, amount_mx)
         self.avg_turnover_20d = turnover_src.rolling(20).mean()
         # 上市天数矩阵（累计有效数据天数，用于上市天数过滤）
         # 动态处理：新上市股在达到 min_listing_days 前不可选，退市股数据变NaN后自然排除

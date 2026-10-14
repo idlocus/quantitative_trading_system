@@ -163,17 +163,12 @@ class DailyReplayBacktester:
         self.prev_close_mx = self.close_mx.shift(1)
         self.raw_close_mx = pd.DataFrame(close).sort_index()    # 撮合/涨跌停（不复权）
         self._check_bench_continuity()
-        # 成交额（元）：amount列优先（data/turnover 统一口径），缺失退化 close×volume(股)
+        # 成交额（元）：经由 semantics.turnover_matrix 统一口径
+        from data.semantics import turnover_matrix
         vol_mx = pd.DataFrame(volume).reindex(self.close_mx.index).sort_index()
-        fallback = self.close_mx * vol_mx
         amount_mx = pd.DataFrame(amount).reindex(self.close_mx.index).sort_index()
-        if not amount_mx.empty:
-            self.avg_turnover_20d = amount_mx.where(amount_mx > 0).fillna(fallback).rolling(20).mean()
-        elif not vol_mx.empty:
-            self.avg_turnover_20d = fallback.rolling(20).mean()
-        else:
-            self.avg_turnover_20d = pd.DataFrame(index=self.close_mx.index,
-                                                 columns=self.close_mx.columns)
+        turnover_src = turnover_matrix(self.close_mx, vol_mx, amount_mx)
+        self.avg_turnover_20d = turnover_src.rolling(20).mean()
         self.data_age = self.close_mx.notna().cumsum()
         # ST 状态矩阵（PIT）——注意用 self.cfg（config=None 时默认初始化，公共接口安全）
         self.st_matrix = self.cfg.st_matrix

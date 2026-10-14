@@ -74,21 +74,20 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     ev = FactorEvaluator(cache)
     scores = pd.Series(dtype=float)
     sig_date = valid_dates[-1]
-    total_syms = max(score_mx.shape[1], 1)
     for dt in reversed(valid_dates[-10:]):
-        row = score_mx.loc[dt]
-        n_valid = row.notna().sum()
-        coverage = n_valid / total_syms
+        from data.semantics import factor_coverage
+        coverage = factor_coverage(score_mx, dt)
+        n_valid = int(score_mx.loc[dt].notna().sum())
         if n_valid > 10 and coverage >= MIN_FACTOR_COVERAGE and dt in ev.close_mx.index:
-            scores = row.dropna()
+            scores = score_mx.loc[dt].dropna()
             sig_date = dt
             break
     if len(scores) == 0:
         logger.error(f"[signal] 因子覆盖率崩塌：最近10日覆盖率均<{MIN_FACTOR_COVERAGE}，"
                      f"进入数据停机（禁止交易——防止数据故障被当成正常调仓）")
         return [], pd.Series(dtype=float)
-    logger.info(f"[signal] 信号日期: {sig_date.date()}（覆盖率{len(scores)}/{total_syms}"
-                f"={len(scores)/total_syms:.0%}）")
+    logger.info(f"[signal] 信号日期: {sig_date.date()}（有效{len(scores)}/"
+                f"{score_mx.shape[1]}只）")
 
     # 排除当日无价格（停牌）——用缓存尾部判断
     from research.factor_eval import FactorEvaluator

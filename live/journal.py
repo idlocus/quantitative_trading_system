@@ -89,18 +89,15 @@ class JournalWriter:
                 lines.append(f"| {o.side} | {o.symbol} | {o.amount:,.0f} | {reason} |")
             lines.append("")
 
-        # 风控检查（L2-L4 执行闸门 + 基础约束——区分目标/计划/实际三个口径）
-        target_w = 1.0 / max(self.top_n, 1)            # 单票目标权重 = 1/top_n
-        n_t = max(len(targets), 1)
-        planned_exposure = min(1.0, n_t * target_w)     # 计划仓位 = min(目标数×权重, 100%)
-        planned_cash = 1.0 - planned_exposure            # 计划现金比例
-        actual_cash = (self.ledger.cash / (self.ledger.cash + sum(
-            q * prices.get(s, 0) for s, q in self.ledger.positions.items()))
-            if (self.ledger.cash + sum(q * prices.get(s, 0) for s, q in self.ledger.positions.items())) > 0
-            else 1.0)
+        # 风控检查（L2-L4 执行闸门 + 基础约束——经由 semantics 统一口径）
+        from data.semantics import planned_exposure as calc_exposure, actual_cash_ratio
+        target_w = 1.0 / max(self.top_n, 1)
+        planned_exp, planned_cash = calc_exposure(len(targets), self.top_n)
+        actual_cash = actual_cash_ratio(self.ledger.cash,
+                                        self.ledger.positions, prices)
         basic = [f"- 单票目标权重 {target_w:.1%}（上限 5%）：{'通过' if target_w <= 0.05 else '超限'}",
                  f"- 持仓数 {len(targets)}/{self.top_n}（目标）",
-                 f"- 计划仓位 {planned_exposure:.0%} | 计划现金 {planned_cash:.0%}",
+                 f"- 计划仓位 {planned_exp:.0%} | 计划现金 {planned_cash:.0%}",
                  f"- 当前账户现金 {actual_cash:.0%}",
                  "- 涨跌停约束：执行层自动拒单", ""]
         lines += ["## 四、盘前风控检查（执行闸门，基于昨收预览；收盘后以当日数据复核）", ""]
