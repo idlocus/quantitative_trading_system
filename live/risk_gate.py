@@ -221,7 +221,6 @@ class RiskGate:
                 d.action = action
 
         # L2.6 对账安全闸门：上次对账不一致或存在未处理异常时禁止新交易
-        # （此前交易后才对账——错误持仓/现金会继续产生错误订单）
         if hasattr(ledger, 'open_exceptions') and ledger.open_exceptions():
             n_ex = len(ledger.open_exceptions())
             d.reasons.append(f'[L2] 账本存在{n_ex}项未处理异常（超额卖出等）——'
@@ -238,7 +237,6 @@ class RiskGate:
                 action = 'no_buy'
                 d.action = action
         elif last_recon:
-            # 对账新鲜度：上次对账距今超过3天（实盘应每日对账）
             recon_date = last_recon.get('date', '')
             if recon_date and as_of:
                 try:
@@ -255,6 +253,50 @@ class RiskGate:
         # 注：「从未对账」不作为闸门条件——Paper/回测无对账单，会被误拦截。
         # 实盘首次对账由运维流程保障（run_live.py --status 提示"从未对账"）。
 
+        # L3.2 波动率目标缩仓（此前仅回测有——实盘闸门未执行）
+        cfg = self.cfg  # 本地引用（与_enforce_stops一致）
+        if action in ('trade', 'scale'):
+            vol = self._recent_portfolio_vol(ledger)
+            if vol is not None and vol > cfg.vol_target:
+                vol_scale = cfg.vol_target / vol
+                new_exposure = exposure * vol_scale
+                d.reasons.append(
+                    f'[L3] 波动率{vol:.0%}>目标{cfg.vol_target:.0%}，仓位上限缩至{new_exposure:.0%}')
+                exposure = new_exposure
+                action = 'scale' if new_exposure < 0.999 else action
+                d.exposure = exposure
+
+        # L3.3 现金底线检查（此前仅回测有）
+        nav_pre = ledger.cash + sum(q * prices.get(s, 0) for s, q in ledger.positions.items())
+        if action in ('trade', 'scale') and nav_pre > 0:
+            planned_buy = sum(o.amount for o in orders if o.side == 'BUY')
+            projected_cash = ledger.cash - planned_buy
+            min_cash = cfg.min_cash_ratio * nav_pre
+            if projected_cash < min_cash:
+                d.reasons.append(
+                    f'[L3] 买入后现金{projected_cash:,.0f}<底线{min_cash:,.0f}'
+                    f'（{cfg.min_cash_ratio:.0%}×NAV）——缩减买入')
+                # _assemble的buy_budget机制已控制总额，此处主要是预警
+                if action == 'trade':
+                    action = 'scale'
+                    d.action = action
+
+        # L3.4 换手上限检查（此前仅回测有）
+        if action in ('trade', 'scale') and orders:
+            cur_w = ledger.current_weights(prices) if ledger.positions else {}
+            all_buy_w = sum(o.amount for o in orders if o.side == 'BUY') / max(nav_pre, 1)
+            all_sell_w = sum(o.amount for o in orders if o.side == 'SELL') / max(nav_pre, 1)
+            planned_turnover = (all_buy_w + all_sell_w) / 2
+            if planned_turnover > cfg.max_turnover:
+                d.reasons.append(
+                    f'[L3] 计划换手{planned_turnover:.0%}>上限{cfg.max_turnover:.0%}——缩减')
+                # buy_budget机制已通过exposure控制总量，此处预警+缩量
+                exposure = min(exposure, exposure * cfg.max_turnover / planned_turnover)
+                d.exposure = exposure
+                if action == 'trade':
+                    action = 'scale'
+                    d.action = action
+
         # L4 强制卖出（halt 已排除；liquidate 时由清仓指令覆盖）
         forced = [] if action == 'liquidate' else self._enforce_stops(ledger, prices, as_of, d)
 
@@ -267,6 +309,18 @@ class RiskGate:
                     f"放行{len(d.orders)} 拦截{len(d.suppressed)} 强制卖出{n_forced}"
                     + (f" | 昨基准{bench_chg:+.1%}" if bench_chg is not None else ""))
         return d
+
+    def _recent_portfolio_vol(self, ledger, window: int = 20) -> Optional[float]:
+        """近N日组合年化波动率（基于净值序列）"""
+        import numpy as np
+        nav_hist = ledger.nav_series()
+        if len(nav_hist) < window + 1:
+            return None
+        navs = [h['nav'] for h in nav_hist[-(window + 1):]]
+        rets = [(navs[i] / navs[i-1] - 1) for i in range(1, len(navs)) if navs[i-1] > 0]
+        if len(rets) < window:
+            return None
+        return float(np.std(rets) * np.sqrt(252))
 
     # ================= L2 数据停机 =================
 
