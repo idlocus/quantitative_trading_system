@@ -184,6 +184,39 @@ def run_pm(ds, ledger, writer, ctx, execute=None, top_n=100, yes=False,
                 'source': 'parse_error', 'note': str(e)[:100]}
             ledger.save()
 
+    # ---- F2 告警 + F6 健康视图（每次PM运行后自动生成） ----
+    try:
+        from monitoring.alerts import alert, P0, P1
+        from monitoring.health import generate_health_report
+
+        # 信号覆盖率告警
+        if len(targets) == 0:
+            alert('SIGNAL_COVERAGE_COLLAPSE', P0,
+                  f"目标持仓0只（数据链路故障），闸门={decision.action}")
+        elif len(targets) < 20:
+            alert('SIGNAL_LOW_TARGETS', P1,
+                  f"目标持仓仅{len(targets)}只（正常~100），数据可能不完整")
+
+        # 对账失败告警
+        if recon is not None and not recon.is_ok:
+            alert('RECONCILIATION_FAILED', P0,
+                  f"对账不一致：{len(recon.diffs)}项差异",
+                  n_diffs=len(recon.diffs))
+
+        # 闸门 halt 告警
+        if decision.action == 'halt':
+            alert('RISK_GATE_HALT', P0,
+                  f"闸门halt：{decision.data_issues[:2]}")
+
+        # 生成健康报告
+        health = generate_health_report(
+            ledger,
+            signal_info={'target_count': len(targets),
+                         'signal_date': str(signal_date)})
+        logger.info(f"[Health] 状态: {health['overall']}")
+    except Exception as e:
+        logger.warning(f"[Health] 告警/健康报告生成失败: {e}")
+
     path = writer.write_pm(ds, fills, ctx, gate=decision, recon=recon)
     print(f"盘后日志已追加: {path}")
     if fills:

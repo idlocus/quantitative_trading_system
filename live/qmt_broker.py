@@ -271,12 +271,28 @@ class QMTBroker(Broker):
         零股一次性规则需要知道实际持仓）
 
         QMT 实盘流程：
-        1. 检查执行窗口（撮合假设=T日收盘价→收盘竞价时段；窗口外大声警告）
-        2. 按顺序提交订单（先卖后买，释放资金）
-        3. 等待订单回报（超时撤单，部分成交按增量入账）
-        4. 返回 Fill 列表
+        1. 交易控制状态检查（HALT_ALL→拒单；CLOSE_ONLY→过滤买入）
+        2. 检查执行窗口（撮合假设=T日收盘价→收盘竞价时段；窗口外大声警告）
+        3. 按顺序提交订单（先卖后买，释放资金）
+        4. 等待订单回报（超时撤单，部分成交按增量入账）
+        5. 返回 Fill 列表
         """
         self._ensure_connected()
+
+        # F3: 交易控制状态在 QMT 侧二次检查（RiskGate 之后的最后防线）
+        try:
+            from scripts.trading_switch import effective_state
+            _sw = effective_state()
+        except Exception:
+            _sw = 'NORMAL'
+        if _sw == 'HALT_ALL':
+            logger.error("[QMT] 交易控制=HALT_ALL，拒单")
+            return [Fill(o, 0, 0, 0, 0, trade_date,
+                         status='rejected(HALT_ALL)') for o in orders]
+        if _sw == 'CLOSE_ONLY':
+            orders = [o for o in orders if o.side != 'BUY']
+            if not orders:
+                logger.info("[QMT] CLOSE_ONLY，买入全部过滤")
         if not check_execution_window():
             if self.enforce_window:
                 logger.error("[QMT] 当前时间不在收盘竞价窗口(14:50-15:05)——"
