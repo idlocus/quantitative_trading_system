@@ -75,7 +75,7 @@ class JournalWriter:
                                st_data_ok=psig.st_ok)
 
         lines += ["## 三、盘前决策依据", "",
-                  f"- 生产信号：5因子（EP/BP/SP/Size/低杠杆）Top{self.top_n}，"
+                  f"- 生产信号：质量过滤+价值合成+趋势(0.2) Top{self.top_n}，"
                   f"基于 {prev_trading} 收盘（T-1信号，今日执行）",
                   f"- 目标持仓 {len(targets)} 只；调仓指令 {len(orders)} 条"
                   f"（缓冲带20%，无漂移则零调仓）", ""]
