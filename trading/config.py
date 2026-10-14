@@ -16,7 +16,8 @@ PRODUCTION_FACTORS = {'ep': 1.0, 'bp': 1.0, 'sp': 1.0}
 MOMENTUM_WEIGHT = 0.2          # 趋势叠加权重（0.2=价值0.8+动量0.2）
 QUALITY_FILTER = {
     'roe_min': 0.08,           # ROE > 8%（PIT公告值）
-    'leverage_max': 3.0,       # 资产/权益 < 3.0（约=负债率<67%）
+    'leverage_max': 65.0,      # 负债/权益 < 65%（PIT值=百分比，≈资产/权益<2.9；
+                                # 此前错用3.0当资产/权益倍数，实际PIT返回的是D/E%）
 }
 TOP_N = 100                  # 目标持仓数
 WARMUP_DAYS = 400            # 因子 warm-up 自然日
