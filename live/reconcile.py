@@ -36,6 +36,9 @@ DIFF_TRADE_MISSING_LEDGER = 'trade_missing_ledger'   # 券商有、账本无（�
 DIFF_TRADE_MISSING_BROKER = 'trade_missing_broker'   # 账本有、券商无（撤单后误记/重复入账嫌疑）
 DIFF_TRADE_DUP = 'trade_duplicate'         # 券商回报自身重复
 DIFF_FEE = 'fee_diff'                      # 手续费不一致
+DIFF_QTY = 'qty_diff'                      # 同ID成交数量不一致
+DIFF_PRICE = 'price_diff'                  # 同ID成交价格不一致
+DIFF_COST_BASIS = 'cost_basis_unknown'     # 持仓多出但无成交依据
 
 
 @dataclass
@@ -69,6 +72,8 @@ class BrokerStatement:
             for k in ('date', 'symbol', 'side', 'price', 'quantity'):
                 if k not in t:
                     raise ValueError(f"券商成交缺少字段 {k}: {t}")
+            if int(t['quantity']) <= 0:
+                raise ValueError(f"券商成交数量≤0（非法对账数据）: {t}")
             out.append({
                 'date': str(t['date'])[:10], 'symbol': t['symbol'],
                 'side': str(t['side']).upper(), 'price': float(t['price']),
@@ -99,12 +104,8 @@ def write_statement_template(path: str = None) -> str:
         'source': 'manual',
         'note': '从券商App截图/交割单手工誊录；QMT就位后可自动生成',
         'cash': 0.0,
-        'positions': {'600527.SH': 0},
-        'trades': [
-            {'date': date.today().isoformat(), 'symbol': '600527.SH', 'side': 'SELL',
-             'price': 0.0, 'quantity': 0, 'commission': 0.0, 'taxes': 0.0,
-             'trade_id': ''}
-        ],
+        'positions': {},
+        'trades': [],
     }
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(tpl, f, ensure_ascii=False, indent=2)
@@ -124,7 +125,9 @@ class ReconDiff:
         return {DIFF_CASH: '现金不一致', DIFF_POSITION: '持仓数量不一致',
                 DIFF_TRADE_MISSING_LEDGER: '券商有成交·账本漏记',
                 DIFF_TRADE_MISSING_BROKER: '账本有成交·券商无（误记/重复入账嫌疑）',
-                DIFF_TRADE_DUP: '券商回报重复', DIFF_FEE: '手续费差异'}.get(self.kind, self.kind)
+                DIFF_TRADE_DUP: '券商回报重复', DIFF_FEE: '手续费差异',
+                DIFF_QTY: '成交数量不一致', DIFF_PRICE: '成交价格不一致',
+                DIFF_COST_BASIS: '成本基准不可确认'}.get(self.kind, self.kind)
 
 
 @dataclass
@@ -255,12 +258,12 @@ class Reconciler:
                 px_diff = abs(float(lt['price']) - float(bt['price']))
                 if qty_diff > 0:
                     rep.diffs.append(ReconDiff(
-                        DIFF_FEE, f"数量差 {qty_diff:+d}（账本{lt['quantity']}/券商{bt['quantity']}）",
+                        DIFF_QTY, f"数量差 {qty_diff:+d}（账本{lt['quantity']}/券商{bt['quantity']}）",
                         symbol=bt['symbol'], ledger_value=lt['quantity'],
                         broker_value=bt['quantity']))
                 if px_diff > 0.005:  # 超1分钱价差
                     rep.diffs.append(ReconDiff(
-                        DIFF_FEE, f"价格差 {px_diff:+.4f}（账本{lt['price']:.4f}/券商{bt['price']:.4f}）",
+                        DIFF_PRICE, f"价格差 {px_diff:+.4f}（账本{lt['price']:.4f}/券商{bt['price']:.4f}）",
                         symbol=bt['symbol'], ledger_value=float(lt['price']),
                         broker_value=float(bt['price'])))
                 fee_l = float(lt['commission']) + float(lt['taxes'])
@@ -311,16 +314,28 @@ class Reconciler:
                 booked, _, _blocked = ledger.apply_fills(fills)
                 actions.append(f"补记券商成交 {len(booked)} 笔")
 
-        # 2) 持仓数量对齐
+        # 2) 持仓数量对齐——区分成本基准处理
         all_syms = set(ledger.positions) | set(stmt.positions)
         n_pos = 0
+        n_cost_unknown = 0
+        booked_syms = {f.order.symbol for f in fills if f.status == 'filled'} if fills else set()
         for s in sorted(all_syms):
-            bq = stmt.positions.get(s, 0)
-            if ledger.positions.get(s, 0) != bq:
-                ledger.adjust_position(s, bq, f'账实核对修正@{as_of}')
-                n_pos += 1
+            lq, bq = ledger.positions.get(s, 0), stmt.positions.get(s, 0)
+            if lq == bq:
+                continue
+            if bq > lq and s not in booked_syms:
+                rep.diffs.append(ReconDiff(
+                    DIFF_COST_BASIS,
+                    f"券商多出{bq - lq:+d}股但无成交依据（疑送转/未入账交易）",
+                    symbol=s, ledger_value=lq, broker_value=bq))
+                n_cost_unknown += 1
+                continue
+            ledger.adjust_position(s, bq, f'账实核对修正@{as_of}')
+            n_pos += 1
         if n_pos:
             actions.append(f"修正持仓 {n_pos} 只")
+        if n_cost_unknown:
+            actions.append(f"⛔ {n_cost_unknown} 只成本基准不可确认")
 
         # 3) 现金对齐（含费用差净额，统一以券商现金为准）
         if abs(ledger.cash - stmt.cash) > 0.005:
@@ -329,9 +344,8 @@ class Reconciler:
 
         # 4) 记录对账结果（修正后重新核对；未自动处理项仍会体现为差异）
         rep_after = self.reconcile(ledger, stmt)
-        ledger._d['meta']['last_recon'] = {'date': as_of, 'ok': rep_after.is_ok,
-                                           'n_diffs': len(rep_after.diffs),
-                                           'source': stmt.source, 'fixed': True}
+        ledger.record_recon(as_of, rep_after.is_ok, len(rep_after.diffs),
+                            source=stmt.source, fixed=True)
         ledger.save()
         if any(d.kind == DIFF_TRADE_MISSING_BROKER for d in rep.diffs):
             actions.append("提示：账本有·券商无的成交未自动处理，需人工核查（撤单误记/重复入账）")

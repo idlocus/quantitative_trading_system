@@ -35,3 +35,8 @@ live/qmt_orders.json
 
 # 运行时状态（独立于源码部署；旧环境状态不随代码复制）
 runtime/
+
+# 损坏账本备份（含交易记录，不入库）
+live/ledger.json.corrupted_*
+live/*.bak
+live/*.backup

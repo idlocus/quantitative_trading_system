@@ -25,7 +25,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# 视为"ST类"（主板适用±5%）的状态码
+# 视为"ST类"（主板适用±5%）的状态码。R是伴随状态，不独立代表涨跌幅规则。
 ST_TYPES = {'S', 'X', 'Y', 'P'}
 
 
@@ -66,7 +66,12 @@ class STProvider:
                     f"ASHAREST 仅返回 {len(rows)} 行（历史基线≈2765，下限"
                     f"{self.MIN_SANITY_ROWS}）——疑似权限/同步/过滤异常，"
                     "按数据故障进入安全模式（st_ok=False → 禁买）")
-            logger.info(f"[STProvider] ASHAREST 加载 {len(rows)} 行")
+            active = sum(1 for _, t, _, rm in rows
+                         if t in ST_TYPES and (rm is None or str(rm).strip() == ''))
+            if active < 50:
+                raise RuntimeError(
+                    f"ASHAREST 活跃ST记录仅{active}条（正常应>300）——疑似同步停滞")
+            logger.info(f"[STProvider] ASHAREST 加载 {len(rows)} 行（活跃ST {active}）")
             return rows
         finally:
             cur.close()

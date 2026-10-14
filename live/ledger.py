@@ -270,6 +270,14 @@ class Ledger:
             exs[index]['resolved_note'] = note
             self.save()
 
+    def record_recon(self, as_of: str, ok: bool, n_diffs: int,
+                     source: str = 'manual', fixed: bool = False):
+        """统一对账记录入口"""
+        self._d.setdefault('meta', {})['last_recon'] = {
+            'date': as_of, 'ok': ok, 'n_diffs': n_diffs,
+            'source': source, 'fixed': fixed}
+        self.save()
+
     # ---- 净值 ----
 
     def mark_to_market(self, prices: Dict[str, float], as_of: date) -> float:
