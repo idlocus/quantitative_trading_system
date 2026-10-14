@@ -55,13 +55,10 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     pit = PITFinancialProvider(ds)
 
     mats = {}
-    for f in ['ep', 'bp', 'sp', 'size']:
+    for f in ['ep', 'bp', 'sp']:    # v2: 价值合成（去掉size/leverage权重）
         fm = build_fundamental_matrix(prov, f, pool, start, as_of)
         if not fm.empty:
             mats[f] = fm
-    lev = pit.get_factor_matrix('leverage', pool, start, as_of)
-    if not lev.empty:
-        mats['leverage'] = lev
 
     score_mx = composite_from_matrices(mats, directions=PRODUCTION_FACTORS)
     if score_mx.empty:
@@ -113,6 +110,50 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     illiquid = illiquid_set(cache, ts, MIN_DAILY_TURNOVER)
     if illiquid:
         scores = scores[~scores.index.isin(illiquid)]
+
+    # ---- v2 质量过滤（ROE>8% + 杠杆<3.0，作为筛选而非权重） ----
+    qf = chain.QUALITY_FILTER
+    if qf.get('roe_min') is not None:
+        roe = pit.get_factor_matrix('roe', pool, start, as_of)
+        if not roe.empty and sig_date in roe.index:
+            roe_row = roe.loc[sig_date]
+            fail_roe = roe_row[roe_row <= qf['roe_min']].index
+            if len(fail_roe) > 0:
+                scores = scores[~scores.index.isin(fail_roe)]
+                logger.info(f"[signal] 质量过滤ROE: 排除{len(fail_roe)}只")
+    if qf.get('leverage_max') is not None:
+        lev = pit.get_factor_matrix('leverage', pool, start, as_of)
+        if not lev.empty and sig_date in lev.index:
+            lev_row = lev.loc[sig_date]
+            fail_lev = lev_row[lev_row >= qf['leverage_max']].index
+            if len(fail_lev) > 0:
+                scores = scores[~scores.index.isin(fail_lev)]
+                logger.info(f"[signal] 质量过滤杠杆: 排除{len(fail_lev)}只")
+
+    # ---- v2 趋势叠加（6个月剔1个月复权收益 × MOMENTUM_WEIGHT） ----
+    mw = chain.MOMENTUM_WEIGHT
+    if mw > 0 and len(scores) > 20:
+        close_dfs = {}
+        for sym in scores.index:
+            df = cache.get(sym)
+            if df is not None and not df.empty:
+                idx2 = pd.DatetimeIndex(pd.to_datetime(df['date'])).as_unit('ns')
+                adj_col = 'adjclose' if 'adjclose' in df.columns else 'close'
+                close_dfs[sym] = pd.Series(
+                    pd.to_numeric(df[adj_col], errors='coerce').values, index=idx2)
+        if close_dfs:
+            close_s = pd.DataFrame(close_dfs).sort_index()
+            try:
+                px_21 = close_s.shift(21).loc[ts] if ts in close_s.index else None
+                px_126 = close_s.shift(126).loc[ts] if ts in close_s.index else None
+                if px_21 is not None and px_126 is not None:
+                    mom = (px_21 / px_126 - 1).dropna()
+                    v_z = (scores - scores.mean()) / (scores.std() + 1e-10)
+                    m_z = (mom - mom.mean()) / (mom.std() + 1e-10)
+                    common = v_z.index.intersection(m_z.index)
+                    scores = ((1 - mw) * v_z + mw * m_z).loc[common].dropna()
+            except (KeyError, IndexError):
+                pass    # 数据不足时退化为纯价值
 
     # ST 过滤（PIT，ASHAREST）：主板ST涨跌幅±5%、退市风险高，不入选。
     # 数据不可用时的安全策略由调用方决定：生产入口 generate_production_signal
