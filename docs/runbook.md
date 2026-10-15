@@ -2,6 +2,39 @@
 
 > 个人资金管理，简洁实用。每个场景一个问题、一个动作。
 
+## 策略/框架变更上线流程（实盘在跑时改任何东西都走这里）
+
+实盘环境=滚动状态（账本/持仓/净值历史），不是可替换的软件包。
+代码与策略随时可换，状态永远延续——变更通过**下一个交易日的正常决策**
+生效，存量持仓由 diff 订单渐进迁移（缓冲带控制换手），无"清仓重来"。
+
+**五关 checklist（任何策略/参数/规则改动上实盘前）：**
+
+```
+1. 验证关（离线）：R6 全套
+   □ mainchain/十年重放工件重新生成，结果可解释
+   □ pytest -m release_gate 通过（生产=重放一致性）
+   □ 全量 pytest 通过
+   □ docs 更新（口径变更留档）
+2. 影子关（1-2 周，可与新信号的研究验证并行）：
+   □ 版本A下: python scripts/compare_targets.py --save A
+   □ 版本B下: python scripts/compare_targets.py --save B
+   □ python scripts/compare_targets.py --compare A B
+   □ diff 可解释（预期换手/迁移成本）；paper 并行跑新版对照
+3. 灰度关：CLOSE_ONLY 部署（python scripts/trading_switch.py close）
+   □ 部署新代码；旧目标自然退出（只卖不买一个调仓周期）
+   □ 确认无异常 → python scripts/trading_switch.py normal
+4. 监控关：每日实盘 vs paper vs 回测三线偏差；周报对比
+5. 回退路：config/代码在 git——revert 即回滚未来决策；
+   已成交的迁移交易不可撤销（沉没成本）——所以第 1、2 关在前
+```
+
+**状态文件迁移**：`risk_state.json` / 账本带 `schema_version`，语义变更
+加载时自动迁移并留痕（`live/risk_gate.py::_migrate_state`）。升级后首日
+检查日志无迁移告警以外的异常。
+
+**最坏情况**：`HALT_ALL` → 人工审查 → 按下方"硬限清仓与重入"一节处理。
+
 ## 紧急停止
 
 ```bash

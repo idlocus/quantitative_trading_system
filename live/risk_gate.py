@@ -35,6 +35,10 @@ def _parse_date(s) -> date:
     """'YYYY-MM-DD'（或 date/datetime）→ date（重入熔断窗口计算用）"""
     return date.fromisoformat(str(s)[:10])
 
+
+# 风控状态文件版本（语义变更显式迁移；v1=无版本字段时代，v2=滚动熔断协议）
+STATE_SCHEMA_VERSION = 2
+
 from live.broker import Order
 from trading import config as chain_cfg
 from utils.logger import get_logger
@@ -148,13 +152,37 @@ class RiskGate:
     # ================= 状态持久化 =================
 
     def _load_state(self) -> dict:
+        st = {'no_buy_until': None}
         if os.path.isfile(self.state_path):
             try:
                 with open(self.state_path, encoding='utf-8') as f:
-                    return json.load(f)
+                    st = json.load(f)
             except Exception:
                 logger.warning("risk_state.json 损坏，重建")
-        return {'no_buy_until': None}
+        return self._migrate_state(st)
+
+    def _migrate_state(self, st: dict) -> dict:
+        """状态文件版本迁移（显式留痕，不靠字段缺省静默兼容）。
+
+        v1 → v2（2026-10-15 重入协议定稿）：冷却/梯度相位字段
+        （reentry_phase/reentry_days_left/liq_count）被滚动熔断语义
+        （liq_dates/protocol_halted）取代，无法映射→丢弃并告警。"""
+        v = st.get('schema_version', 1)
+        if v < STATE_SCHEMA_VERSION:
+            for k in ('reentry_phase', 'reentry_days_left', 'liq_count'):
+                if k in st:
+                    logger.warning(f"[RiskGate] 状态迁移 v{v}→v{STATE_SCHEMA_VERSION}:"
+                                   f" 丢弃已被取代的字段 {k}={st.pop(k)}")
+            st['schema_version'] = STATE_SCHEMA_VERSION
+            try:
+                self._save_state_raw(st)
+            except Exception:
+                pass
+        return st
+
+    def _save_state_raw(self, st: dict):
+        with open(self.state_path, 'w', encoding='utf-8') as f:
+            json.dump(st, f, ensure_ascii=False, indent=1)
 
     def _save_state(self):
         try:

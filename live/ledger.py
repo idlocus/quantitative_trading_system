@@ -49,6 +49,11 @@ class Ledger:
         self._d.setdefault('events', [])
         self._d.setdefault('exceptions', [])   # 待人工核对异常（如超额卖出）
         self._d.setdefault('meta', {})
+        # 状态文件版本：语义变更时显式迁移（不靠字段缺省静默兼容——
+        # 2026-10-15 实盘变更管理缺口#3 补齐；v1=当前格式，历史上仅靠
+        # setdefault 扛过所有变更）
+        if 'schema_version' not in self._d['meta']:
+            self._d['meta']['schema_version'] = 1
         self._d.setdefault('cash', 0.0)
         self._d.setdefault('positions', {})
         self._d.setdefault('cost', {})

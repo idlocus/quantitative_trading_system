@@ -445,3 +445,28 @@ class TestReentryProtocol:
         d = self._review(gate, led)
         assert d.action == 'trade', "研究对照无熔断"
         assert any('研究对照' in r for r in d.reasons)
+
+
+class TestStateMigration:
+    """risk_state.json 版本迁移（显式留痕，2026-10-15 变更管理缺口#3）"""
+
+    def test_v1_fields_migrated_and_persisted(self, tmp_path):
+        import json as _json
+        sp = str(tmp_path / 'rs.json')
+        with open(sp, 'w', encoding='utf-8') as f:
+            _json.dump({'no_buy_until': None, 'liq_count': 1,
+                        'reentry_phase': 'cooldown', 'reentry_days_left': 7,
+                        'dd_anchor': 900000.0}, f)
+        gate = RiskGate(state_path=sp)
+        st = gate._state
+        assert st['schema_version'] == 2
+        for k in ('liq_count', 'reentry_phase', 'reentry_days_left'):
+            assert k not in st, f"v1 已废弃字段 {k} 应被迁移清除"
+        assert st['dd_anchor'] == 900000.0      # 仍有效的字段保留
+        # 迁移结果已落盘（重启不再重复迁移）
+        on_disk = _json.load(open(sp, encoding='utf-8'))
+        assert on_disk['schema_version'] == 2
+
+    def test_fresh_state_gets_current_version(self, tmp_path):
+        gate = RiskGate(state_path=str(tmp_path / 'new.json'))
+        assert gate._state.get('schema_version') == 2
