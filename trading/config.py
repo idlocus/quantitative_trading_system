@@ -80,6 +80,21 @@ MIN_CASH_RATIO = 0.05        # 最低现金比例
 REENTRY_MAX_LIQUIDATIONS = 3    # 熔断窗口内硬限清仓次数上限（超过=永久停机）
 REENTRY_CIRCUIT_WINDOW_DAYS = 365  # 熔断计数滚动窗口（日历日≈252交易日）
 
+# ---- ETF 趋势引擎（第二 sleeve，2026-10-15 集成） ----
+# 原型验证（指数、3资产、2021-10起）+17.5%/夏普0.41/回撤-10.8%、参数4/4稳定；
+# 集成时改用真实 ETF 代码（2015 起、含黄金共 4 资产）按同一预注册标准重验证
+# （experiments/etf_trend.py 经由唯一实现 trading/etf_strategy.py）。
+ETF_ASSETS = {
+    '510300.SH': '沪深300ETF',
+    '510500.SH': '中证500ETF',
+    '511010.SH': '国债ETF',
+    '518880.SH': '黄金ETF',
+}
+ETF_TREND_LOOKBACK = 126        # 趋势回看（交易日，6个月；3/6/9/12月需全正）
+ETF_REBALANCE = 'monthly'       # 调仓频率（每月首个交易日）
+ETF_COST_RATE = 0.001           # 单边成本（ETF佣金+滑点；无印花税）
+ETF_SLEEVE_CAPITAL = 300_000.0  # paper 初始资金（股票 sleeve=1,000,000；30% 配比可调）
+
 
 def validate():
     """配置自校验——RiskGate / build_strategy_score 入口调用，违反=启动即失败。
