@@ -20,8 +20,9 @@ MAIN_CHAIN = [
     'run_daily.py', 'run_live.py', 'run_daily_replay.py',
 ]
 
-# 弃用包名
-DEPRECATED = ('backtesting', 'strategy', 'selection')
+# 弃用包名（risk 包=旧引擎残留，SLIPPAGE=0.0 与主链不可比且零测试——
+# 评审报告 §2.7；主链风险定义在 trading/config + live/risk_gate）
+DEPRECATED = ('backtesting', 'strategy', 'selection', 'risk')
 
 
 class TestLegacyIsolation:

@@ -48,7 +48,7 @@ def main():
         lev = pit.get_factor_matrix('leverage', pool, d0, d1)
         if not lev.empty: mats['leverage'] = lev
 
-        original = composite_from_matrices(mats, directions=DIRECTIONS)
+        original = composite_from_matrices(mats, directions=DIRECTIONS, experimental=True)
 
         # T-1 信号：shift(1) 使每个日期用的是前一日的因子值
         shifted = original.shift(1)

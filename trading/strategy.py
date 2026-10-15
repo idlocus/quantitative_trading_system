@@ -48,6 +48,7 @@ def build_strategy_score(ds, pool, start, end):
         (score_mx: DataFrame, cache: dict, factor_mats: dict)
         factor_mats 含原始因子矩阵（供单因子覆盖率检查）
     """
+    chain.validate()   # 配置自校验（唯一真源参数组合必须自洽）
     cache = _make_loader(ds).preload_klines(pool + ['000300.SH'], start, end)._cache
 
     # ---- 价值合成（仅 PRODUCTION_FACTORS 声明的因子） ----
@@ -111,9 +112,28 @@ def _filter_by_factor(score, factor_mx, mode, threshold, label):
 
 
 def _build_momentum_matrix(cache, d0, d1):
-    """6个月剔1个月复权收益矩阵"""
-    from experiments.momentum_overlay import build_momentum_matrix
-    return build_momentum_matrix(cache, d0, d1)
+    """中期趋势矩阵：过去~126交易日（6个月）剔最近~21日（1个月）的复权收益。
+
+    momentum = adjclose[t-21] / adjclose[t-126] - 1
+    生产自有实现（2026-10-15 起，评审 §2.3 依赖倒置修复：原先唯一实现
+    反向依赖 experiments/momentum_overlay，实验目录的改动会静默改变生产策略）；
+    experiments/momentum_overlay 现在反向引用本函数。
+    价格基准=前复权（R2：收益计算声明 adjusted）。"""
+    close_dfs = {}
+    for sym, df in cache.items():
+        if df is None or df.empty or sym in ('000300.SH', '000905.SH', '000852.SH'):
+            continue
+        idx = pd.DatetimeIndex(pd.to_datetime(df['date'])).as_unit('ns')
+        adj = 'adjclose' if 'adjclose' in df.columns else 'close'
+        close_dfs[sym] = pd.Series(
+            pd.to_numeric(df[adj], errors='coerce').values, index=idx)
+
+    close_mx = pd.DataFrame(close_dfs).sort_index()
+    # 6个月前的价格（用于计算趋势）
+    px_1m_ago = close_mx.shift(21)    # 剔最近1个月
+    px_6m_ago = close_mx.shift(126)   # 6个月前
+    momentum = (px_1m_ago / px_6m_ago - 1).loc[pd.Timestamp(d0):pd.Timestamp(d1)]
+    return momentum
 
 
 def _combine_value_momentum(score, momentum, weight):

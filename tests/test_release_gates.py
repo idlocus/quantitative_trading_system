@@ -84,18 +84,34 @@ class TestConsistencyGate:
             sig.build_fundamental_matrix = orig_build
 
     def test_quality_filter_threshold_consistent(self):
-        """质量过滤阈值必须来自 trading/config，不得在多处硬编码"""
+        """质量过滤阈值必须真正驱动行为（行为断言，评审 §2.5b）。
+
+        旧版断言"源码中出现 str(阈值)"——任意位置出现 '0.08' 即通过，
+        哪怕阈值硬编码、行为完全错。改为：同一数据、两个阈值，
+        过滤结果必须不同（生产/重放共用的 trading/strategy._filter_by_factor）。
+        """
+        import pandas as pd
         from trading import config as chain
-        # 检查生产信号代码引用的是 config 值
-        import inspect
-        src = inspect.getsource(sig_src_path := __import__('live.signals', fromlist=['generate_target']))
-        # 如果config中的值被硬编码在signals.py中，说明分叉
-        assert str(chain.QUALITY_FILTER['roe_min']) in src or \
-               'qf.get(\'roe_min\')' in src, \
-            "ROE阈值未从config引用——R1违规"
-        assert str(chain.QUALITY_FILTER['leverage_max']) in src or \
-               'qf.get(\'leverage_max\')' in src, \
-            "杠杆阈值未从config引用——R1违规"
+        from trading import strategy as strat
+
+        score = pd.DataFrame(1.0, index=[pd.Timestamp('2026-09-08')],
+                             columns=list('ABC'))
+        roe = pd.DataFrame([[0.05, 0.10, 0.20]],
+                           index=score.index, columns=list('ABC'))
+
+        t0 = chain.QUALITY_FILTER['roe_min']
+        out_lo = strat._filter_by_factor(score.copy(), roe, 'min', t0, 'ROE')
+        out_hi = strat._filter_by_factor(score.copy(), roe, 'min', 0.15, 'ROE')
+        assert pd.isna(out_lo.iloc[0]['A']) and not pd.isna(out_lo.iloc[0]['B'])
+        assert pd.isna(out_hi.iloc[0]['B']), \
+            f"ROE 阈值 {t0}→0.15 未改变过滤行为——阈值未真正生效（R1违规）"
+
+        lev = pd.DataFrame([[30.0, 60.0, 80.0]],
+                           index=score.index, columns=list('ABC'))
+        out_lev = strat._filter_by_factor(
+            score.copy(), lev, 'max', chain.QUALITY_FILTER['leverage_max'], '杠杆')
+        assert not pd.isna(out_lev.iloc[0]['A']) and pd.isna(out_lev.iloc[0]['C']), \
+            "杠杆阈值（max 方向）过滤行为错误——R1违规"
 
     def test_replay_uses_production_factors(self):
         """重放回测必须使用与生产相同的因子（不是自己的列表）"""

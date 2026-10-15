@@ -38,7 +38,7 @@ def main():
         combos = [('4因子基线', mats, D4),
                   ('5因子生产', {**mats, 'leverage': lev}, {**D4, 'leverage': -1.0})]
         for label, m, dirs in combos:
-            score = composite_from_matrices(m, directions=dirs)
+            score = composite_from_matrices(m, directions=dirs, experimental=True)
             bt = PortfolioBacktester(cache, PortfolioConfig(top_n=100, rebalance_days=20,
                                      slippage=0.001, benchmark_symbol=BENCH))
             r = bt.run(score, start_date=str(ts))

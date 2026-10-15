@@ -142,14 +142,20 @@ def validate_factor_matrix(mx: pd.DataFrame, contract: FactorContract) -> dict:
     """
     校验因子矩阵并返回质量元数据。
 
+    契约分级（2026-10-15，评审报告 §2.6 / 根因3.4）：
+      硬契约（违反=拒绝，进 issues，passed=False）：覆盖率——错了必然错
+      软契约（违反=告警，进 warnings，不影响 passed）：数值合理区间——
+        越界可能只是 A 股常见极端值（ep>1、bp>3 等非数据错误），
+        "没有区分错误等级的严谨校验，比没有校验更危险"
+
     Returns:
         {'date': str, 'coverage': float, 'n_valid': int, 'n_total': int,
-         'unit': str, 'passed': bool, 'issues': [str]}
+         'unit': str, 'passed': bool, 'issues': [str], 'warnings': [str]}
     """
     meta = {
         'factor': contract.factor_name,
         'coverage': 0.0, 'n_valid': 0, 'n_total': mx.shape[1] if not mx.empty else 0,
-        'unit': contract.unit, 'passed': False, 'issues': []
+        'unit': contract.unit, 'passed': False, 'issues': [], 'warnings': []
     }
     if mx.empty:
         meta['issues'].append('矩阵为空')
@@ -162,17 +168,19 @@ def validate_factor_matrix(mx: pd.DataFrame, contract: FactorContract) -> dict:
     meta['coverage'] = n_valid / max(n_total, 1)
     meta['date'] = str(mx.index[-1])
 
+    # 硬契约：覆盖率
     if meta['coverage'] < contract.min_coverage:
         meta['issues'].append(
             f"覆盖率{meta['coverage']:.0%}<{contract.min_coverage:.0%}")
 
+    # 软契约：数值合理区间（只告警不阻断）
     if contract.expected_range:
         lo, hi = contract.expected_range
         vals = last_row.dropna()
         if len(vals) > 0:
             out_of_range = vals[(vals < lo) | (vals > hi)]
             if len(out_of_range) > len(vals) * 0.05:  # >5%超值域
-                meta['issues'].append(
+                meta['warnings'].append(
                     f"{len(out_of_range)}个值超预期值域[{lo},{hi}]"
                     f"（unit='{contract.unit}'可能不正确）")
 
@@ -182,11 +190,12 @@ def validate_factor_matrix(mx: pd.DataFrame, contract: FactorContract) -> dict:
 
 # ================= 已知的因子契约注册表 =================
 # 每个因子的单位、值域、来源——新增因子必须在此登记
+# 值域=软契约（超5%仅告警），按 A 股实际极端值放宽（评审 §2.6）
 
 FACTOR_CONTRACTS = {
-    'ep': FactorContract('ep', 'ratio', (-0.5, 1.0), 0.30),
-    'bp': FactorContract('bp', 'ratio', (-0.5, 3.0), 0.30),
-    'sp': FactorContract('sp', 'ratio', (0.0, 10.0), 0.30),
+    'ep': FactorContract('ep', 'ratio', (-1.0, 2.0), 0.30),
+    'bp': FactorContract('bp', 'ratio', (-0.5, 5.0), 0.30),
+    'sp': FactorContract('sp', 'ratio', (0.0, 20.0), 0.30),
     'size': FactorContract('size', 'yuan', (1e7, 1e12), 0.30),  # 市值(元)
     'leverage': FactorContract('leverage', 'pct', (0, 500), 0.20),  # D/E百分比
     'roe': FactorContract('roe', 'ratio', (-0.5, 1.0), 0.20),   # ROE比率

@@ -83,7 +83,7 @@ def main():
             if not fm.empty: mats[f] = fm
         lev = pit.get_factor_matrix('leverage', pool, d0, d1)
         if not lev.empty: mats['leverage'] = lev
-        fund_score = composite_from_matrices(mats, directions=DIRECTIONS)
+        fund_score = composite_from_matrices(mats, directions=DIRECTIONS, experimental=True)
 
         # 收盘价矩阵
         bt_base = PortfolioBacktester(cache, PortfolioConfig(benchmark_symbol=BENCH))

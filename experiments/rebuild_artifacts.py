@@ -49,7 +49,7 @@ def main():
             fm = build_fundamental_matrix(provider, f, pool, dstart, dend)
             if not fm.empty:
                 matrices[f] = fm.loc[pd.Timestamp(dstart):pd.Timestamp(dend)]
-        score = composite_from_matrices(matrices, directions=DIRECTIONS)
+        score = composite_from_matrices(matrices, directions=DIRECTIONS, experimental=True)
 
         for label, sc, topn in [('Top100', score, 100),
                                 ('Top500', score, min(500, len(pool))),

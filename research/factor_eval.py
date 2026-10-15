@@ -70,37 +70,9 @@ class FactorEvalResult:
 
 
 def build_factor_matrix(cache: Dict[str, pd.DataFrame], factor_func: Callable) -> pd.DataFrame:
-    """
-    构建因子截面矩阵（dates × symbols）
-
-    每只股票的指标在其完整历史K线上计算一次（rolling/ewm 只依赖历史，
-    时点正确），再按日期对齐到统一矩阵。
-    DataFrame 型指标自动取注册时声明的 primary_column。
-    """
-    data = {}
-    for sym, df in cache.items():
-        if df is None or df.empty:
-            continue
-        try:
-            vals = factor_func(df)
-            if isinstance(vals, pd.DataFrame):
-                col = getattr(factor_func, '_primary_column', None)
-                vals = vals[col] if col and col in vals.columns else vals.iloc[:, -1]
-            vals = pd.Series(vals)
-            vals = vals.astype(float)
-            # 对齐日期索引
-            if not isinstance(vals.index, pd.DatetimeIndex):
-                if len(vals) == len(df):
-                    vals.index = pd.to_datetime(df['date'])
-                else:
-                    continue
-            # 统一时间分辨率（pandas 3 中 us/ns 混用会导致跨索引 .loc 失败）
-            vals.index = pd.DatetimeIndex(vals.index).as_unit('ns')
-            data[sym] = vals
-        except Exception as e:
-            logger.debug(f"[build_factor_matrix] {sym}: {e}")
-            continue
-    return pd.DataFrame(data)
+    """因子截面矩阵——已下沉到 data/factor_matrix.py（生产层数据工具），此处反向引用"""
+    from data.factor_matrix import build_factor_matrix as _bfm
+    return _bfm(cache, factor_func)
 
 
 class FactorEvaluator:

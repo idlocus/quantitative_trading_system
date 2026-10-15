@@ -59,7 +59,7 @@ def main():
         for f, fm in mats.items():
             run(fm, f)
         # 合成（4因子）
-        run(composite_from_matrices(mats, directions=DIRECTIONS), '合成组合')
+        run(composite_from_matrices(mats, directions=DIRECTIONS, experimental=True), '合成组合')
         # 等权对照
         idx = list(mats.values())[0].loc[pd.Timestamp(test_start):].index
         cols = list(mats.values())[0].columns

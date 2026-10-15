@@ -22,7 +22,8 @@ from .risk_gate import RiskGate, GateConfig, RiskDecision
 from .reconcile import Reconciler, BrokerStatement, ReconReport
 
 
-def make_broker(mode: str, lot_map: dict = None, enforce_window: bool = True):
+def make_broker(mode: str, lot_map: dict = None, enforce_window: bool = True,
+                switch_state: str = 'NORMAL'):
     """
     执行器工厂（run_daily / run_live 统一入口）。
 
@@ -31,6 +32,7 @@ def make_broker(mode: str, lot_map: dict = None, enforce_window: bool = True):
         lot_map: {symbol: 最低申报数量}（BoardParamsProvider.lot_map；
                  缺省走板块规则：科创200/其余100）
         enforce_window: QMT 非收盘竞价窗口拒单（默认True；CLI --outside-window 关闭）
+        switch_state: 交易控制三态（启动时读一次注入；get_state 已 fail-safe）
 
     Raises:
         ValueError: 未知模式
@@ -54,7 +56,7 @@ def make_broker(mode: str, lot_map: dict = None, enforce_window: bool = True):
             raise RuntimeError(
                 "QMT 环境未就绪，本次不执行任何指令。逐项修复：\n  - "
                 + "\n  - ".join(env['issues']))
-        b = QMTBroker(enforce_window=enforce_window)
+        b = QMTBroker(enforce_window=enforce_window, switch_state=switch_state)
         b.lot_map = lot_map or {}
         return b
     raise ValueError(f"未知执行模式: {mode}（可选 paper / qmt）")

@@ -41,12 +41,10 @@ from trading import config as chain_cfg
 
 
 def _est_fees(side: str, value: float):
-    """预估费用（与 PaperBroker/回测同一费率模型=trading/config；
+    """预估费用（唯一实现=trading/rules.estimate_fees，费率=trading/config；
     实际以券商回报为准，账实核对修正差异）"""
-    commission = value * chain_cfg.COMMISSION
-    taxes = value * chain_cfg.TRANSFER_FEE + \
-        (value * chain_cfg.STAMP_TAX if side == 'SELL' else 0)
-    return commission, taxes
+    from trading.rules import estimate_fees
+    return estimate_fees(side, value)
 
 
 def check_execution_window(now=None) -> bool:
@@ -117,14 +115,19 @@ class QMTBroker(Broker):
     def __init__(self, account_id: str = None, qmt_path: str = None,
                  state_path: str = DEFAULT_ORDER_STATE,
                  order_timeout: float = 30,
-                 enforce_window: bool = True):
+                 enforce_window: bool = True,
+                 switch_state: str = 'NORMAL'):
         """enforce_window=True（默认）：非收盘竞价窗口直接拒单（策略撮合假设=T日
         收盘价，窗口外成交价将系统性偏离假设）。需窗口外执行时显式传 False
-        （CLI: run_daily/run_live 的 --outside-window）。"""
+        （CLI: run_daily/run_live 的 --outside-window）。
+        switch_state：交易控制三态（显式注入；2026-10-15 前此处每次 execute
+        读全局状态文件且失败静默放行——热路径依赖文件系统且 fail-open）。
+        生产由 make_broker → run_daily/run_live 启动时读一次注入。"""
         self.account_id = account_id or QMT_ACCOUNT_ID
         self.qmt_path = qmt_path or QMT_PATH
         self.order_timeout = order_timeout       # 单笔等待终态时长（秒）
         self.enforce_window = enforce_window
+        self.switch_state = switch_state
         self._xt_trader = None
         self._account = None
         self._connected = False
@@ -279,12 +282,9 @@ class QMTBroker(Broker):
         """
         self._ensure_connected()
 
-        # F3: 交易控制状态在 QMT 侧二次检查（RiskGate 之后的最后防线）
-        try:
-            from scripts.trading_switch import effective_state
-            _sw = effective_state()
-        except Exception:
-            _sw = 'NORMAL'
+        # F3: 交易控制状态在 QMT 侧二次检查（RiskGate 之后的最后防线；
+        # 状态来自构造注入，热路径不读文件系统）
+        _sw = self.switch_state
         if _sw == 'HALT_ALL':
             logger.error("[QMT] 交易控制=HALT_ALL，拒单")
             return [Fill(o, 0, 0, 0, 0, trade_date,

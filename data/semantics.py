@@ -26,7 +26,10 @@ def get_price_column(df: pd.DataFrame, basis: str = 'raw') -> str:
 
     Args:
         basis: 'raw'=不复权（实盘成交/成本/止损/涨跌停）
-               'adjusted'=前复权（回测净值/收益/因子前瞻收益）
+               'adjusted'=复权价（回测收益/因子前瞻收益）。注意：缓存 adjclose
+               为 Wind S_DQ_ADJCLOSE=后复权（锚定上市日，adjclose/close≥1 且随
+               分红送转递增）——收益计算与前复权等价，禁止用于价格水平
+               （成本基准/涨跌停/成交价）。2026-10-15 契约抽样实测修正标签。
     """
     if basis == 'raw':
         return 'close'         # 不复权列名 = close
@@ -193,3 +196,21 @@ def actual_cash_ratio(cash: float, positions: dict, prices: dict) -> float:
     if total <= 0:
         return 1.0
     return cash / total
+
+
+def close_matrix(cache: dict, basis: str = 'raw') -> pd.DataFrame:
+    """K线缓存 → 收盘价矩阵（dates × symbols）。
+
+    口径收敛（评审 §2.3，2026-10-15）：生产信号（停牌过滤/上市天数）原先
+    构造 research.factor_eval.FactorEvaluator 只为取其 close_mx——生产层
+    依赖研究层。现为本层唯一实现，研究层反向引用。
+    basis: 'raw'=不复权（可用性/上市天数）；'adjusted'=前复权（收益类计算）。"""
+    cols = {}
+    for sym, df in cache.items():
+        if df is None or df.empty:
+            continue
+        col = get_price_column(df, basis=basis)
+        idx = pd.DatetimeIndex(pd.to_datetime(df['date'])).as_unit('ns')
+        cols[sym] = pd.Series(pd.to_numeric(df[col], errors='coerce').values,
+                              index=idx)
+    return pd.DataFrame(cols).sort_index()

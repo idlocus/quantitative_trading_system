@@ -44,7 +44,7 @@ def build_scores(ds, pool, d0, d1):
     lev = pit.get_factor_matrix('leverage', pool, d0, d1)
     if not lev.empty:
         mats['leverage'] = lev.loc[pd.Timestamp(d0):pd.Timestamp(d1)]
-    return composite_from_matrices(mats, directions=D5)
+    return composite_from_matrices(mats, directions=D5, experimental=True)
 
 
 def monthly_signal(score_mx, rebalance_day=1):

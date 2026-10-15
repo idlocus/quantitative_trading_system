@@ -88,13 +88,36 @@ def alert(code: str, level: str, message: str, **context):
     log_fn = logger.critical if level == P0 else (logger.warning if level == P1 else logger.info)
     log_fn(f"[Alert:{level}] {code}: {message}")
 
-    # 3. Webhook（如果配置）
+    # 3. Webhook（如果配置；失败重试+死信落盘，告警不丢——评审 §2.8/#12）
     webhook_url = load_webhook_config()
     if webhook_url:
+        _send_webhook_with_retry(webhook_url, event)
+
+
+def _send_webhook_with_retry(url: str, event: dict, max_retries: int = 3):
+    """webhook 发送：3次重试（2s/4s 退避），全败写死信文件（可人工重放）。"""
+    import time as _t
+    last_err = None
+    for attempt in range(1, max_retries + 1):
         try:
-            _send_webhook(webhook_url, event)
+            _send_webhook(url, event)
+            return True
         except Exception as e:
-            logger.error(f"[Alert] webhook发送失败: {e}")
+            last_err = e
+            logger.warning(f"[Alert] webhook 第{attempt}/{max_retries}次发送失败: {e}")
+            if attempt < max_retries:
+                _t.sleep(min(2 ** attempt, 8))   # 2s → 4s 退避
+    try:
+        os.makedirs(MONITORING_DIR, exist_ok=True)
+        with open(os.path.join(MONITORING_DIR, 'webhook_dead.jsonl'), 'a',
+                  encoding='utf-8') as f:
+            f.write(json.dumps({'retry_error': str(last_err), **event},
+                               ensure_ascii=False) + '\n')
+        logger.error(f"[Alert] webhook {max_retries}次全败，已写死信 "
+                     f"(monitoring/webhook_dead.jsonl): {last_err}")
+    except Exception:
+        logger.critical(f"[Alert] webhook 全败且死信写入失败: {last_err}")
+    return False
 
 
 def _send_webhook(url: str, event: dict):

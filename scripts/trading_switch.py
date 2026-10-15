@@ -39,15 +39,21 @@ VALID_STATES = {NORMAL, CLOSE_ONLY, HALT_ALL}
 
 
 def get_state() -> str:
-    """读取当前交易控制状态"""
+    """读取当前交易控制状态。
+
+    fail-safe（2026-10-15 定稿，评审报告 §2.1）：状态文件存在但损坏/不可读
+    → HALT_ALL。读不出状态=不知道该不该停，唯一安全的解释是"停"——
+    误停的代价（一天不交易 + 人工修复）远小于失灵放行的代价。
+    文件不存在 → NORMAL（未设置开关=正常运行，与损坏不同）。"""
     if not os.path.isfile(STATE_FILE):
         return NORMAL
     try:
         with open(STATE_FILE, encoding='utf-8') as f:
             d = json.load(f)
         return d.get('state', NORMAL)
-    except Exception:
-        return NORMAL  # 文件损坏时不阻断（与Kill Switch不同——静默不比误停更危险）
+    except Exception as e:
+        logger.error(f"[switch] 状态文件损坏，按 HALT_ALL 处理（fail-safe）: {e}")
+        return HALT_ALL
 
 
 def get_state_detail() -> dict:

@@ -426,6 +426,7 @@ class TestBatch12SafetyAndPhases:
                             lambda now=None: False)    # 强制窗口外
         b = qb.QMTBroker.__new__(qb.QMTBroker)
         b.enforce_window = True
+        b.switch_state = 'NORMAL'
         b._connected = True
         fills = b.execute([Order('600000.SH', 'BUY', 0.1, quantity=100)],
                           {'600000.SH': 10.0}, datetime(2026, 10, 13, 9, 40))
@@ -437,6 +438,7 @@ class TestBatch12SafetyAndPhases:
         monkeypatch.setattr(qb, 'check_execution_window', lambda now=None: False)
         b = qb.QMTBroker.__new__(qb.QMTBroker)
         b.enforce_window = False                        # 显式覆盖
+        b.switch_state = 'NORMAL'
         b._connected = True
         b._account = None
 

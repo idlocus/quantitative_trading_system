@@ -51,7 +51,7 @@ def build_value_score(ds, pool, d0, d1):
             mats[f] = fm.loc[pd.Timestamp(d0):pd.Timestamp(d1)]
     # 等权合成（每个因子先做截面标准化，避免量纲差异）
     directions = {'ep': 1.0, 'bp': 1.0, 'sp': 1.0}
-    return composite_from_matrices(mats, directions=directions)
+    return composite_from_matrices(mats, directions=directions, experimental=True)
 
 
 def build_quality_filter(ds, pool, d0, d1):

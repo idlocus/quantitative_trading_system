@@ -265,9 +265,10 @@ def main():
         # ST 集合由生产信号入口统一加载（psig.st_symbols/st_ok，信号/撮合/闸门同源）
 
         # 执行风控闸门（L2停机/L3熔断/L4强制卖出）——改写后才可执行
-        from live.risk_gate import RiskGate
+        from live.risk_gate import RiskGate, GateConfig
+        from scripts.trading_switch import effective_state
         bench_cache = ds.preload_batch(['000300.SH'], as_of - timedelta(days=20), as_of)
-        gate = RiskGate()
+        gate = RiskGate(GateConfig(trading_switch=effective_state()))
         decision = gate.review(orders, ledger, prices, prev, targets,
                                bench_df=bench_cache.get('000300.SH'), as_of=as_of,
                                st_data_ok=psig.st_ok, stale_symbols=stale_syms)
@@ -298,8 +299,10 @@ def main():
         if args.execute in ('paper', 'qmt'):
             try:
                 from live import load_lot_map
+                from scripts.trading_switch import effective_state as _es
                 broker = make_broker(args.execute, lot_map=load_lot_map(ds),
-                                     enforce_window=not args.outside_window)
+                                     enforce_window=not args.outside_window,
+                                     switch_state=_es())
             except RuntimeError as e:
                 print(f"\n{e}")
                 return

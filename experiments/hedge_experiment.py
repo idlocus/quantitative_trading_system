@@ -38,7 +38,7 @@ def main():
         for f in D4:
             fm = build_fundamental_matrix(prov, f, pool, d0, d1)
             if not fm.empty: mats[f] = fm.loc[pd.Timestamp(d0):pd.Timestamp(d1)]
-        score = composite_from_matrices(mats, directions=D4)
+        score = composite_from_matrices(mats, directions=D4, experimental=True)
 
         bt_base = PortfolioBacktester(cache, PortfolioConfig(benchmark_symbol=BENCH))
         close_mx = bt_base.close_mx

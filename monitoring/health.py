@@ -139,7 +139,7 @@ def generate_health_report(ledger, signal_info: dict = None,
 
 
 def _check_providers() -> dict:
-    """检查数据源状态"""
+    """检查数据源状态 + 最新装载来源构成（降级可见性，评审 §2.8/#13）"""
     providers = {}
     # Oracle DB
     try:
@@ -155,6 +155,34 @@ def _check_providers() -> dict:
         providers['wind'] = {'status': 'ok'}
     except ImportError:
         providers['wind'] = {'status': 'unavailable'}
+    # 最新装载的来源构成（data/layered 每次装载后落盘）
+    try:
+        import json as _json
+        stats_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'runtime', 'layered_stats.json')
+        if os.path.isfile(stats_path):
+            with open(stats_path, encoding='utf-8') as f:
+                s = _json.load(f)
+            total_rows = max(s.get('cache_rows', 0) + s.get('db_rows', 0)
+                             + s.get('client_rows', 0), 1)
+            client_share = s.get('client_rows', 0) / total_rows
+            db_share = s.get('db_rows', 0) / total_rows
+            providers['source_mix'] = {
+                'status': 'degraded' if client_share > 0.30 else 'ok',
+                'at': s.get('at'),
+                'symbols': s.get('symbols'), 'hit': s.get('hit'),
+                'rows': {'cache': s.get('cache_rows', 0),
+                         'db': s.get('db_rows', 0),
+                         'client_windpy': s.get('client_rows', 0)},
+                'shares': {'cache': round(1 - client_share - db_share, 3),
+                           'db': round(db_share, 3),
+                           'client_windpy': round(client_share, 3)},
+                'note': ('WindPy兜底占比>30%——DB缺口扩大，配额承压'
+                         if client_share > 0.30 else '正常分层（缓存→DB→客户端兜底）'),
+            }
+    except Exception:
+        pass
     return providers
 
 

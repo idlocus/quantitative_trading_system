@@ -65,9 +65,8 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     # ---- 信号质量闸门（数据停机保护）----
     # 回退到最后所有因子覆盖率均达标且综合分有效的日期
     # （此前只查综合分覆盖率——单因子缺失被重新加权掩盖）
-    from research.factor_eval import FactorEvaluator
-    from data.semantics import factor_coverage
-    ev = FactorEvaluator(cache)
+    from data.semantics import factor_coverage, close_matrix
+    close_mx = close_matrix(cache)
     scores = pd.Series(dtype=float)
     sig_date = valid_dates[-1]
     required_factors = set(PRODUCTION_FACTORS.keys())
@@ -75,7 +74,7 @@ def generate_target(ds: LayeredDataSource, as_of: date,
         # 1. 综合分覆盖率
         coverage = factor_coverage(score_mx, dt)
         n_valid = int(score_mx.loc[dt].notna().sum())
-        if n_valid <= 10 or coverage < MIN_FACTOR_COVERAGE or dt not in ev.close_mx.index:
+        if n_valid <= 10 or coverage < MIN_FACTOR_COVERAGE or dt not in close_mx.index:
             continue
 
         # 2. 单因子覆盖率（任一必需因子缺失→该日期不可用）
@@ -115,16 +114,14 @@ def generate_target(ds: LayeredDataSource, as_of: date,
                 f"{score_mx.shape[1]}只，单因子覆盖均已检查）")
 
     # 排除当日无价格（停牌）——用缓存尾部判断
-    from research.factor_eval import FactorEvaluator
-    ev = FactorEvaluator(cache)
     # 所有过滤统一使用 sig_date（信号回退后valid_dates[-1]≠sig_date，
     # 此前混用导致因子来自旧日期但过滤来自新日期——前视风险）
-    last_prices = ev.close_mx.loc[sig_date] if sig_date in ev.close_mx.index else pd.Series()
+    last_prices = close_mx.loc[sig_date] if sig_date in close_mx.index else pd.Series()
     tradable = last_prices.dropna()
     scores = scores[scores.index.intersection(tradable.index)]
 
     # 上市天数过滤：需≥60个交易日数据（与回测一致）
-    data_age = ev.close_mx.notna().cumsum()
+    data_age = close_mx.notna().cumsum()
     if sig_date in data_age.index:
         age_today = data_age.loc[sig_date]
         eligible = age_today[age_today >= MIN_LISTING_DAYS].index
@@ -366,7 +363,8 @@ def build_orders(targets: List[str], current_weights: Dict[str, float],
             sell_proceeds_w += (w - target_w)
 
     # 买入：新目标 或 低配（逐笔扣减可用资金，防止超卖）
-    remaining_w = 1.0 - sum(current_weights.values()) + sell_proceeds_w * 0.95  # 卖出回收×95%折扣（费用+滑点）
+    remaining_w = 1.0 - sum(current_weights.values()) + \
+        sell_proceeds_w * chain.SELL_PROCEEDS_DISCOUNT  # 卖出回收折扣（费用+滑点）
     for s in targets:
         w = current_weights.get(s, 0.0)
         if w < target_w * (1 - band):

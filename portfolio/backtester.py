@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from risk.constants import BacktestParams
+from trading.config import TRADING_DAYS_PER_YEAR  # 主链唯一来源（旧 risk.constants 属弃用包）
 from trading import config as chain
 from trading import rules
 from trading.rules import limit_ratio_series
@@ -110,7 +110,7 @@ class PortfolioBacktester:
     def __init__(self, cache: Dict[str, pd.DataFrame], config: PortfolioConfig):
         self.config = config
         close = {}          # 不复权（涨跌停判定用——与真实市场价一致）
-        adjclose = {}       # 前复权（净值/收益计算用——跨除权连续）
+        adjclose = {}       # 复权价（Wind后复权；收益计算用——跨除权连续，禁用于价格水平）
         volume = {}
         amount = {}
         for sym, df in cache.items():
@@ -486,10 +486,10 @@ class PortfolioBacktester:
         final_capital = float(equity.iloc[-1])
         total_return = final_capital / cfg.initial_capital - 1
         n_days = len(equity)
-        annual_return = (1 + total_return) ** (BacktestParams.TRADING_DAYS_PER_YEAR / max(n_days, 1)) - 1
+        annual_return = (1 + total_return) ** (TRADING_DAYS_PER_YEAR / max(n_days, 1)) - 1
         rets = equity.pct_change().dropna()
-        sharpe = float((rets.mean() * BacktestParams.TRADING_DAYS_PER_YEAR) /
-                       (rets.std() * np.sqrt(BacktestParams.TRADING_DAYS_PER_YEAR))) if rets.std() > 0 else 0.0
+        sharpe = float((rets.mean() * TRADING_DAYS_PER_YEAR) /
+                       (rets.std() * np.sqrt(TRADING_DAYS_PER_YEAR))) if rets.std() > 0 else 0.0
         dd = (equity / equity.cummax() - 1).min()
 
         benchmark_return = None

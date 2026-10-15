@@ -30,25 +30,10 @@ ERAS = [('fullmarket_2022_2026', date(2021, 11, 1), date(2026, 10, 9), date(2022
 
 
 def build_momentum_matrix(cache, d0, d1):
-    """
-    中期趋势：过去~126个交易日（6个月）剔最近~21日（1个月）的复权收益。
-    momentum = adjclose[t-21] / adjclose[t-126] - 1
-    """
-    close_dfs = {}
-    for sym, df in cache.items():
-        if df is None or df.empty or sym in ('000300.SH', '000905.SH', '000852.SH'):
-            continue
-        idx = pd.DatetimeIndex(pd.to_datetime(df['date'])).as_unit('ns')
-        adj = 'adjclose' if 'adjclose' in df.columns else 'close'
-        close_dfs[sym] = pd.Series(
-            pd.to_numeric(df[adj], errors='coerce').values, index=idx)
-
-    close_mx = pd.DataFrame(close_dfs).sort_index()
-    # 6个月前的价格（用于计算趋势）
-    px_1m_ago = close_mx.shift(21)    # 剔最近1个月
-    px_6m_ago = close_mx.shift(126)   # 6个月前
-    momentum = (px_1m_ago / px_6m_ago - 1).loc[pd.Timestamp(d0):pd.Timestamp(d1)]
-    return momentum
+    """中期趋势矩阵——委托生产唯一实现 trading/strategy._build_momentum_matrix
+    （2026-10-15 依赖方向修正：实验引用生产，不再被生产引用）"""
+    from trading.strategy import _build_momentum_matrix
+    return _build_momentum_matrix(cache, d0, d1)
 
 
 def combine_value_momentum(value_score, momentum, momentum_weight=0.3):

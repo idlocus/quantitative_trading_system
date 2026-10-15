@@ -30,6 +30,11 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+
+def _parse_date(s) -> date:
+    """'YYYY-MM-DD'（或 date/datetime）→ date（重入熔断窗口计算用）"""
+    return date.fromisoformat(str(s)[:10])
+
 from live.broker import Order
 from trading import config as chain_cfg
 from utils.logger import get_logger
@@ -79,9 +84,20 @@ class GateConfig:
     # 避免 ST 股按普通涨跌停撮合并提交实盘委托；人工确认后恢复。
     st_data_required: bool = True
 
-    # 硬限清仓后是否自动重启（默认停机等待人工决策：硬限=停止是设计意图；
-    # True 时清仓完成即重置回撤锚以现金为新起点重启——研究对照模式用）
+    # L0 交易控制三态（显式注入，默认 NORMAL）：热路径不读文件系统——
+    # 生产由 run_daily/run_live 启动时读一次并注入（get_state 已 fail-safe）；
+    # 重放/研究默认 NORMAL（回测不受 runtime 实时开关影响——2026-10-15 前
+    # 每次 review 读全局状态文件，既是隐式依赖也污染回测隔离）。
+    trading_switch: str = 'NORMAL'
+
+    # 硬限清仓后重入（生产默认，2026-10-15 定稿；参数单一来源=trading/config）：
+    # 清仓完成 → 立即以现金为新锚满仓重入（十年实证：冷却/梯度版被否决）；
+    # 滚动窗口熔断：window_days 内 >max 次硬限清仓 → 永久停机等人工
+    # （防 2008 式连续崩盘的无限循环）。restart_after_liquidation=True 为
+    # 研究对照（跳过熔断计数，纯立即重启）。
     restart_after_liquidation: bool = False
+    reentry_max_liquidations: int = chain_cfg.REENTRY_MAX_LIQUIDATIONS
+    reentry_circuit_window_days: int = chain_cfg.REENTRY_CIRCUIT_WINDOW_DAYS
 
 
 @dataclass
@@ -123,6 +139,7 @@ class RiskGate:
     """执行风控闸门：review() 一次调用完成 L2→L3→L4 全层审查"""
 
     def __init__(self, config: GateConfig = None, state_path: str = DEFAULT_STATE_PATH):
+        chain_cfg.validate()   # 配置自校验（唯一真源参数组合必须自洽）
         self.cfg = config or GateConfig()
         self.state_path = state_path
         self._anomalous: set = set()
@@ -174,28 +191,29 @@ class RiskGate:
         as_of = as_of or date.today()
         d = RiskDecision()
 
-        # 交易控制三态开关（最高优先级；导入失败时降级为NORMAL）
-        try:
-            from scripts.trading_switch import effective_state
-            _sw = effective_state()
-        except Exception:
-            _sw = 'NORMAL'
+        # 交易控制三态开关（最高优先级；状态来自 GateConfig 显式注入，
+        # 2026-10-15 前此处每次 review 读全局文件且读取失败静默放行=fail-open）
+        _sw = self.cfg.trading_switch
         if _sw == 'HALT_ALL':
             d.action = 'halt'
             d.data_issues.append('交易控制=HALT_ALL（人工全停）——所有指令拦截')
             return d
         if _sw == 'CLOSE_ONLY' and d.action not in ('halt',):
-            try:
-                from scripts.trading_switch import allows_buy
-                _can_buy = allows_buy()
-            except Exception:
-                _can_buy = True
-            if not _can_buy:
-                _buys = [o for o in orders if o.side == 'BUY']
-                if _buys:
-                    d.reasons.append(f'[L0] CLOSE_ONLY模式：{len(_buys)}笔买入拦截')
-                    orders = [o for o in orders if o.side != 'BUY']
+            _buys = [o for o in orders if o.side == 'BUY']
+            if _buys:
+                d.reasons.append(f'[L0] CLOSE_ONLY模式：{len(_buys)}笔买入拦截')
+                orders = [o for o in orders if o.side != 'BUY']
             d.reasons.append('[L0] CLOSE_ONLY模式：只卖不买（降风险中）')
+
+        # L2.7 重入协议永久停机（周期内多次硬限清仓；人工重启前拦截一切）
+        if self._state.get('protocol_halted'):
+            d.action, d.exposure = 'halt', 0.0
+            d.data_issues.append('重入协议永久停机（协议周期内多次硬限清仓）——'
+                                 '人工检查后清除 risk_state.json 的 '
+                                 'protocol_halted/liq_count/reentry_* 字段重启')
+            d.suppressed = [(o, '[L2.7] 协议永久停机，全部拦截') for o in orders]
+            self._save_state()
+            return d
 
         self._stale = stale_symbols or set()
 
@@ -211,15 +229,16 @@ class RiskGate:
         action, exposure, bench_chg = self._portfolio_breakers(ledger, bench_df, as_of, d)
         d.action, d.exposure = action, exposure
 
-        # L3.1 空仓死锁/停机语义：
-        #  a) scale+空仓：止损清空/覆盖崩塌导致空仓且深度缩量——不重置锚。
-        #     （2026-10-15 E2E 暴露：此处锚重置+满仓恢复会使回撤按"锚分段"计算，
-        #       每段<硬限而累计可无限深——十年重放实测 B 口径累计 -24.9% 未熔断。
-        #       生产语义：回撤锚只在显式重启时重置，否则始终锚定全程峰值，
-        #       硬限因此约束的是累计回撤。）
-        #  b) liquidate+空仓：硬限清仓完成。默认=停机等待人工决策（硬限=停止
-        #     是设计意图，静默持币2.5年不是）；restart_after_liquidation=True
-        #     时锚重置自动重启（研究对照模式）。两种路径都留痕。
+        # L3.1 空仓/清仓/重入协议语义：
+        #  a) scale+空仓：止损清空/覆盖崩塌导致空仓且深度缩量——不重置锚
+        #     （2026-10-15 E2E 暴露：锚重置使回撤分段累计可绕过硬限）。
+        #  b) liquidate+空仓：硬限清仓完成 →
+        #     - 研究对照（restart_after_liquidation=True）：立即满仓重启
+        #     - 生产（默认）：立即满仓重入 + 滚动窗口熔断计数
+        #       （365日历日内>REENTRY_MAX_LIQUIDATIONS次 → 永久停机等人工）
+        #     协议演进（十年重放实证，2026-10-15）：冷却+梯度版被数据否决
+        #     （-1.5%/-27.6% vs 立即重入 +59.0%/-24.9%——该策略回撤段成簇，
+        #     慢重入系统性错过反弹）；保留的是"立即重入+连续崩盘熔断"。
         if hasattr(ledger, 'positions') and not ledger.positions:
             nav_now = ledger.last_nav() or ledger.cash
             if action == 'scale' and exposure < 0.15 and nav_now > 0:
@@ -227,16 +246,31 @@ class RiskGate:
                                  '回撤锚保持全程峰值不重置——回撤触顶硬限时停机，'
                                  '恢复买入按当前缩量敞口执行')
             if action == 'liquidate' and nav_now > 0:
-                if self.cfg.restart_after_liquidation:
-                    self._state['dd_anchor'] = nav_now
-                    d.reasons.append(f'[L3] 清仓后自动重启：回撤锚重置为 {nav_now:,.0f}'
-                                     '（restart_after_liquidation=True）')
-                    action, exposure = 'trade', 1.0
-                    d.action, d.exposure = action, exposure
+                # 生产与研究对照同路：清仓完成即以现金为新锚满仓重入
+                liq_hist = self._state.setdefault('liq_dates', [])
+                liq_hist.append(str(as_of))
+                window_days = self.cfg.reentry_circuit_window_days
+                window = [dt for dt in liq_hist
+                          if (as_of - _parse_date(dt)).days <= window_days]
+                self._state['liq_dates'] = window
+                if not self.cfg.restart_after_liquidation and \
+                        len(window) > self.cfg.reentry_max_liquidations:
+                    self._state['protocol_halted'] = True
+                    action, exposure = 'halt', 0.0
+                    d.reasons.append(
+                        f'[L3] 重入熔断：{window_days}日历日内第{len(window)}次'
+                        f'硬限清仓 > 上限{self.cfg.reentry_max_liquidations}'
+                        f'——永久停机，人工检查后清除 risk_state.json 的 '
+                        f'protocol_halted/liq_dates 字段重启')
                 else:
-                    d.reasons.append('[L3] 硬限清仓已完成，策略停机持币——'
-                                     '等待人工决策重启（restart_after_liquidation'
-                                     '=True 可自动重启）')
+                    self._state['dd_anchor'] = nav_now   # 现金为重入新锚
+                    action, exposure = 'trade', 1.0
+                    tag = '（研究对照）' if self.cfg.restart_after_liquidation else ''
+                    d.reasons.append(
+                        f'[L3] 硬限清仓完成{tag}：以现金 {nav_now:,.0f} 为新锚'
+                        f'立即重入（{window_days}日内清仓计数'
+                        f'{len(window)}/{self.cfg.reentry_max_liquidations}）')
+                d.action, d.exposure = action, exposure
 
         # L2.5 ST数据安全：不可用时禁买（卖出照常，人工确认后恢复）
         if not st_data_ok and self.cfg.st_data_required and d.action != 'halt':

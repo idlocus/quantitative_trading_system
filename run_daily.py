@@ -52,8 +52,10 @@ def run_pm(ds, ledger, writer, ctx, execute=None, top_n=100, yes=False,
     if execute == 'qmt':
         try:
             from live import make_broker as _mk, load_lot_map
+            from scripts.trading_switch import effective_state
             qmt_broker = _mk('qmt', lot_map=load_lot_map(ds),
-                             enforce_window=not outside_window)
+                             enforce_window=not outside_window,
+                             switch_state=effective_state())
             synced = qmt_broker.sync_pending(ledger)
             if synced:
                 print(f"QMT 在途补记 {len(synced)} 笔（已入账本）")
@@ -122,7 +124,9 @@ def run_pm(ds, ledger, writer, ctx, execute=None, top_n=100, yes=False,
 
     # 执行风控闸门（L2停机/L3熔断/L4强制卖出）——改写后的指令流才可执行
     bench_cache = ds.preload_batch(['000300.SH'], date.today() - timedelta(days=20), date.today())
-    gate = RiskGate()
+    from live.risk_gate import GateConfig
+    from scripts.trading_switch import effective_state
+    gate = RiskGate(GateConfig(trading_switch=effective_state()))
     # gate.as_of=执行日（今日）：T+1锁仓/数据新鲜度均以成交日为准
     decision = gate.review(orders, ledger, prices, prev, targets,
                            bench_df=bench_cache.get('000300.SH'), as_of=date.today(),

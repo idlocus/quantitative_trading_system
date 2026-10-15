@@ -14,6 +14,7 @@
 基本面估值字段（PE/PB/PS/总市值）DB 列直接映射，股息率无 DB 列走客户端。
 """
 
+import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
@@ -153,6 +154,18 @@ class LayeredDataSource:
         logger.info(f"[layered] K线完成: {len(results)}/{len(symbols)} 只, {total} 行 | "
                     f"缓存 {self.stats['cache_rows']} / DB {self.stats['db_rows']} / "
                     f"客户端 {self.stats['client_rows']}")
+        # 降级可见性（评审 §2.8/#13）：最新装载的来源构成落盘，health 视图展示
+        try:
+            from datetime import datetime as _dt
+            stats_path = Path('runtime') / 'layered_stats.json'
+            stats_path.parent.mkdir(exist_ok=True)
+            stats_path.write_text(json.dumps({
+                'at': _dt.now().isoformat()[:19],
+                'symbols': len(symbols), 'hit': len(results), 'rows': total,
+                **self.stats,
+            }, ensure_ascii=False), encoding='utf-8')
+        except Exception:
+            pass
         return results
 
     def _validate_batch(self, results: dict, symbols: list):

@@ -4,7 +4,7 @@
 组合构造 —— 因子合成、选股与权重（向量化，全市场规模可用）
 
 与 selection/scanner 的逐股规则筛选不同，这里走因子矩阵路线：
-每个因子在全历史上一次计算（research.factor_eval.build_factor_matrix），
+每个因子在全历史上一次计算（data.factor_matrix.build_factor_matrix），
 按日横截面 rank 合成综合分，TopN 构造组合。
 """
 
@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from research.factor_eval import build_factor_matrix
+from data.factor_matrix import build_factor_matrix  # 数据层（2026-10-15 下沉，原 research.factor_eval）
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -64,14 +64,28 @@ def composite_score(cache: Dict[str, pd.DataFrame],
 
 def composite_from_matrices(matrices: Dict[str, pd.DataFrame],
                             weights: Optional[Dict[str, float]] = None,
-                            directions: Optional[Dict[str, float]] = None) -> pd.DataFrame:
+                            directions: Optional[Dict[str, float]] = None,
+                            experimental: bool = False) -> pd.DataFrame:
     """
     从因子矩阵直接合成综合分（基本面因子等外部矩阵入口）
 
     各矩阵日频横截面 rank(pct) 后按 direction/weight 加权（与 composite_score 同规则）。
+
+    策略入口收口（评审 §2.4，2026-10-15）：directions 必须等于
+    chain.PRODUCTION_FACTORS（生产组合），否则必须显式传 experimental=True
+    ——无标记的实验合成是 10-15 十年回测口径事故的入口。
     """
     weights = weights or {k: 1.0 for k in matrices}
     directions = directions or {k: 1.0 for k in matrices}
+
+    if not experimental:
+        from trading import config as _chain
+        if directions != _chain.PRODUCTION_FACTORS:
+            raise ValueError(
+                f"composite_from_matrices: directions={dict(directions)} ≠ "
+                f"生产因子组合 {dict(_chain.PRODUCTION_FACTORS)}。"
+                f"实验性合成必须显式传 experimental=True 并登记实验"
+                f"（research/run_experiment.py）。")
 
     # NaN 语义（稀疏因子如一致预期覆盖不全）：按"可用因子"加权均值——
     # 未覆盖的因子不参与该股票的合成，而非使其出局

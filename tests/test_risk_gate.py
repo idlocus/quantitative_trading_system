@@ -59,7 +59,6 @@ class TestL2DataHalt:
         assert d.action == 'halt'
         assert any('覆盖率' in i for i in d.data_issues)
 
-    @pytest.mark.xfail(reason="test isolation: switch/state leaks", strict=False)
     def test_single_anomaly_excluded_not_halt(self, tmp_path):
         """个别异常剔除指令；异常占比超限才停机"""
         led = make_ledger(tmp_path)
@@ -90,7 +89,6 @@ class TestL2DataHalt:
 
 class TestL4ForcedSells:
 
-    @pytest.mark.xfail(reason="test isolation: switch/state leaks", strict=False)
     def test_stop_loss_injects_forced_sell(self, tmp_path):
         led = make_ledger(tmp_path, positions={'A': 1000, 'B': 1000},
                           costs={'A': 10.0, 'B': 10.0})
@@ -139,7 +137,6 @@ class TestL4ForcedSells:
 
 class TestL3PortfolioBreakers:
 
-    @pytest.mark.xfail(reason="test isolation: switch/state leaks", strict=False)
     def test_drawdown_soft_scales_buys(self, tmp_path):
         # 峰值100 → 现90：回撤10% → exposure = 1 - (0.10-0.08)/0.07 ≈ 0.714
         # （最后两日 95→90 = -5.3%，不触发单日暴跌熔断）
@@ -167,7 +164,6 @@ class TestL3PortfolioBreakers:
         assert len(trims) == 1 and trims[0].symbol == 'A'
         assert trims[0].quantity >= 100
 
-    @pytest.mark.xfail(reason="test isolation: switch/state leaks", strict=False)
     def test_drawdown_hard_liquidates_all(self, tmp_path):
         led = make_ledger(tmp_path, positions={'A': 1000, 'B': 2000},
                           costs={'A': 10.0, 'B': 5.0}, navs=[100000, 90000, 84000])  # -16%
@@ -183,7 +179,6 @@ class TestL3PortfolioBreakers:
         assert all('熔断清仓' in o.note for o in d.orders)
         assert len(d.suppressed) == 1   # 原BUY作废
 
-    @pytest.mark.xfail(reason="test isolation: switch/state leaks", strict=False)
     def test_market_crash_no_buy_with_cooldown_persisted(self, tmp_path):
         state = str(tmp_path / 'rs.json')
         led = make_ledger(tmp_path, positions={'A': 1000}, costs={'A': 10.0})
@@ -229,7 +224,6 @@ class TestL3PortfolioBreakers:
 
 class TestNormalFlow:
 
-    @pytest.mark.xfail(reason="test isolation: switch/state leaks", strict=False)
     def test_orders_pass_through_unchanged(self, tmp_path):
         led = make_ledger(tmp_path, positions={'A': 1000}, costs={'A': 10.0})
         gate = RiskGate(state_path=str(tmp_path / 'rs.json'))
@@ -288,7 +282,6 @@ class TestScaleDeadlockFix:
         dates = pd.bdate_range('2026-10-06', periods=3)
         return pd.DataFrame({'date': dates, 'close': [4000.0, 3990.0, 4000.0]})
 
-    @pytest.mark.xfail(reason="test isolation: switch/state leaks", strict=False)
     def test_budget_allocation_not_fragmented(self, tmp_path):
         """缩量预算制：exposure=30% 时足额买 ~30 只（每只1%净值），
         而非 100 只各 0.3% 的碎片（旧逻辑会全部 <min_order_amount 拒掉）"""
@@ -334,7 +327,8 @@ class TestScaleDeadlockFix:
 
 
 class TestLiquidateTerminalSemantics:
-    """硬限清仓终态：默认停机持币（醒目留痕）；restart_after_liquidation=True 自动重启"""
+    """硬限清仓终态：默认进入重入协议冷却（醒目留痕）；
+    restart_after_liquidation=True 立即满仓重启（研究对照）"""
 
     def _bench(self):
         dates = pd.bdate_range('2026-10-06', periods=3)
@@ -350,17 +344,18 @@ class TestLiquidateTerminalSemantics:
                                                         845_000])]
         return led
 
-    def test_default_stops_with_loud_reason(self, tmp_path):
+    def test_default_reenters_with_loud_reason(self, tmp_path):
+        """定稿语义：清仓完成 → 立即满仓重入（醒目留痕+计数），
+        不再无限期持币等人工（十年实证 -7.2% vs +59.0%），也不再冷却"""
         led = self._ledger_liquidated(tmp_path)
         orders = [Order('S001.SH', 'BUY', 0.01, amount=9000)]
         d = RiskGate(state_path=str(tmp_path / 'rs.json')).review(
             orders, led, {'S001.SH': 10.0}, {'S001.SH': 10.0}, [],
             bench_df=self._bench(), as_of=date(2026, 10, 8))
-        assert d.action == 'liquidate'
-        assert any('硬限清仓已完成' in r for r in d.reasons), "停机必须醒目留痕"
-        assert all(o.side != 'BUY' for o in d.orders)
+        assert d.action == 'trade' and d.exposure == 1.0
+        assert any('硬限清仓完成' in r for r in d.reasons), "必须醒目留痕"
+        assert any(o.side == 'BUY' for o in d.orders)
 
-    @pytest.mark.xfail(reason="test isolation: switch/state leaks", strict=False)
     def test_restart_flag_reenables_trading(self, tmp_path):
         led = self._ledger_liquidated(tmp_path)
         orders = [Order('S001.SH', 'BUY', 0.01, amount=9000)]
@@ -369,5 +364,84 @@ class TestLiquidateTerminalSemantics:
             orders, led, {'S001.SH': 10.0}, {'S001.SH': 10.0}, [],
             bench_df=self._bench(), as_of=date(2026, 10, 8))
         assert d.action == 'trade', "restart 模式清仓后应恢复交易"
-        assert any('清仓后自动重启' in r for r in d.reasons)
+        assert any('研究对照' in r for r in d.reasons)
         assert any(o.side == 'BUY' for o in d.orders)
+
+
+class TestReentryProtocol:
+    """重入协议（2026-10-15 定稿：清仓完成→立即满仓重入+滚动窗口熔断）
+
+    参数来自 trading/config：MAX_LIQUIDATIONS=3 / CIRCUIT_WINDOW_DAYS=365。
+    第一轮"冷却20日+半仓梯度"设计被十年重放否决（-1.5%/-27.6% 双输于
+    立即重入 +59.0%/-24.9%），定稿为立即重入+熔断计数。"""
+
+    def _bench(self):
+        dates = pd.bdate_range('2026-10-06', periods=3)
+        return pd.DataFrame({'date': dates, 'close': [4000.0, 3990.0, 4000.0]})
+
+    def _ledger(self, tmp_path, navs, name='l.json'):
+        led = Ledger(str(tmp_path / name))
+        led.initialize(1_000_000)
+        led._d['nav_history'] = [{'date': f'2026-09-{i+1:02d}', 'nav': v}
+                                 for i, v in enumerate(navs)]
+        led._d['positions'] = {}
+        return led
+
+    def _liquidated(self, tmp_path):
+        # 渐进下跌至 dd>15%（硬限），已无持仓（清仓完成）
+        return self._ledger(tmp_path, [1_000_000, 970_000, 940_000, 910_000,
+                                       880_000, 860_000, 845_000])
+
+    def _review(self, gate, led, as_of=date(2026, 10, 8)):
+        return gate.review([Order('S001.SH', 'BUY', 0.01, amount=9000)],
+                           led, {'S001.SH': 10.0}, {'S001.SH': 10.0}, [],
+                           bench_df=self._bench(), as_of=as_of)
+
+    def test_liquidation_reenters_immediately(self, tmp_path):
+        """清仓完成 → 立即满仓重入（现金为新锚），无冷却期"""
+        led = self._liquidated(tmp_path)
+        gate = RiskGate(state_path=str(tmp_path / 'rs.json'))
+        d = self._review(gate, led)
+        assert d.action == 'trade' and d.exposure == 1.0, "定稿语义=立即满仓重入"
+        assert any('立即重入' in r for r in d.reasons)
+        assert abs(gate._state['dd_anchor'] - 845_000) < 1.0   # 现金为锚
+        assert gate._state['liq_dates'] == ['2026-10-08']
+
+    def test_circuit_halts_on_excess_liquidations(self, tmp_path):
+        """滚动窗口内第4次硬限（>上限3）→ 永久停机；后续 review 一律拦截"""
+        gate = RiskGate(state_path=str(tmp_path / 'rs.json'))
+        gate._state['liq_dates'] = ['2026-01-10', '2026-04-10', '2026-07-10']
+        led = self._liquidated(tmp_path)
+        d = self._review(gate, led)
+        assert gate._state.get('protocol_halted') is True
+        assert d.action == 'halt'
+        assert any('重入熔断' in r for r in d.reasons)
+        # 后续（新账本）L2.7 早期拦截一切
+        led2 = self._ledger(tmp_path, [1_000_000, 1_000_000], name='l2.json')
+        d2 = RiskGate(state_path=str(tmp_path / 'rs.json'))._review(
+            RiskGate(state_path=str(tmp_path / 'rs.json')), led2) if False else             RiskGate(state_path=str(tmp_path / 'rs.json')).review(
+                [Order('S001.SH', 'BUY', 0.01, amount=9000)],
+                led2, {'S001.SH': 10.0}, {'S001.SH': 10.0}, [],
+                bench_df=self._bench(), as_of=date(2026, 10, 9))
+        assert d2.action == 'halt'
+        assert any('协议永久停机' in i for i in d2.data_issues)
+
+    def test_circuit_window_expires(self, tmp_path):
+        """窗口外的历史清仓不计数（滚动窗口，旧事件自然失效）"""
+        gate = RiskGate(state_path=str(tmp_path / 'rs.json'))
+        gate._state['liq_dates'] = ['2024-01-10', '2024-06-10', '2025-01-10']
+        led = self._liquidated(tmp_path)
+        d = self._review(gate, led)   # as_of=2026-10-08，全部 >365 日 → 窗口清空
+        assert gate._state.get('protocol_halted') is None
+        assert d.action == 'trade'
+        assert gate._state['liq_dates'] == ['2026-10-08'], "窗口外事件应被淘汰"
+
+    def test_restart_flag_skips_circuit(self, tmp_path):
+        """研究对照（restart=True）：计数超限也不熔断（纯立即重启）"""
+        cfg = GateConfig(restart_after_liquidation=True)
+        gate = RiskGate(cfg, state_path=str(tmp_path / 'rs.json'))
+        gate._state['liq_dates'] = ['2026-01-10', '2026-04-10', '2026-07-10']
+        led = self._liquidated(tmp_path)
+        d = self._review(gate, led)
+        assert d.action == 'trade', "研究对照无熔断"
+        assert any('研究对照' in r for r in d.reasons)

@@ -128,6 +128,10 @@ def save_artifact(kind: str, name: str, payload: dict, formal: bool = False) -> 
     # 注入策略规格（版本治理：每个工件可回答"哪个版本产生的"）
     from trading.spec import attach_spec_to_artifact
     payload = attach_spec_to_artifact(payload)
+    # 注入数据契约指纹（评审 §2.7/#11：契约改动应使旧工件可比性显式失效——
+    # 因子单位/值域/覆盖率定义变了，跨契约对比工件无意义）
+    if 'contracts_hash' not in payload.get('_meta', {}):
+        payload.setdefault('_meta', {})['contracts_hash'] = contracts_fingerprint()
     # 注入版本元数据（代码版本、dirty状态、diff hash、依赖版本、负载hash）
     if '_meta' not in payload or 'code_version' not in payload.get('_meta', {}):
         meta = build_meta(formal=formal)
@@ -207,3 +211,17 @@ def factor_payload(result, horizon_note: str = '') -> dict:
                       'values': [round(float(v), 4) for v in ic.values]},
         'horizon_note': horizon_note,
     }
+
+
+def contracts_fingerprint() -> str:
+    """数据契约注册表指纹（FACTOR_CONTRACTS 内容哈希，前16位）。
+
+    工件携带此指纹后，契约定义（单位/值域/覆盖率）变更可被检测：
+    跨指纹对比工件 = 跨口径对比，结果无意义时应显式重跑。"""
+    from data.contracts import FACTOR_CONTRACTS
+    import hashlib
+    items = sorted(
+        (name, c.unit, str(c.expected_range), c.min_coverage)
+        for name, c in FACTOR_CONTRACTS.items())
+    blob = json.dumps(items, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(blob.encode('utf-8')).hexdigest()[:16]

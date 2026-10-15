@@ -152,3 +152,14 @@ def buy_fee_rate() -> float:
 def sell_fee_rate() -> float:
     """卖出费用率（佣金+过户费+印花税）"""
     return COMMISSION + TRANSFER_FEE + STAMP_TAX
+
+
+def estimate_fees(side: str, value: float):
+    """预估费用（佣金, 税费）——费用拆分公式的唯一实现。
+
+    写路径口径收敛（评审 §2.2）：PaperBroker / QMTBroker / 日报曾各自内联
+    同一拆分，改任一处其余不动=账实分叉。实际费用以券商回报为准，
+    账实核对修正差异。"""
+    commission = value * COMMISSION
+    taxes = value * TRANSFER_FEE + (value * STAMP_TAX if side == 'SELL' else 0)
+    return commission, taxes

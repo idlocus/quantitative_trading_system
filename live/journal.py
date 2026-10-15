@@ -18,6 +18,7 @@ import pandas as pd
 from data.layered import LayeredDataSource
 from indicators.momentum_indicators import RSI
 from live.risk_gate import RiskGate, render_gate_markdown
+from trading import config as chain
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -242,7 +243,7 @@ class JournalWriter:
                 ma50 = float(df['close'].rolling(50).mean().iloc[-1])
                 vol_ma = df['volume'].rolling(20).mean().iloc[-1]
                 vol_ratio = float(df['volume'].iloc[-1] / vol_ma) if vol_ma > 0 else 1.0
-                stop_price = cost * 0.95  # 5%固定止损
+                stop_price = cost * (1 - chain.STOP_LOSS_PCT)  # 硬止损价（主链口径）
                 stop_dist = px / stop_price - 1 if stop_price > 0 else 0
 
                 # 信号判定

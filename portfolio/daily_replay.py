@@ -140,7 +140,7 @@ class DailyReplayBacktester:
     def __init__(self, cache: Dict[str, pd.DataFrame], config: ReplayConfig = None):
         self.cfg = config or ReplayConfig()
         close = {}          # 不复权（撮合/涨跌停/成交价——与真实市场一致）
-        adjclose = {}       # 前复权（净值/收益——跨除权连续）
+        adjclose = {}       # 复权价（Wind后复权；收益计算等价前复权——跨除权连续）
         volume = {}
         amount = {}
         self._bench_df = None
