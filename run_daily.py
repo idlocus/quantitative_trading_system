@@ -159,7 +159,10 @@ def run_pm(ds, ledger, writer, ctx, execute=None, top_n=100, yes=False,
                 fills = broker.execute(decision.orders, prices, date.today(), prev_prices=prev,
                                        available_cash=ledger.cash,
                                        st_symbols=psig.exec_st_symbols,  # 执行日(T)ST集合：撮合按当日戴帽/摘帽状态
-                                       positions=dict(ledger.positions))
+                                       positions=dict(ledger.positions),
+                                       **({'ledger': ledger}
+                                          if getattr(broker, 'ATOMIC_LEDGER_BOOKING', False)
+                                          else {}))
                 booked, dupes, blocked = ledger.apply_fills(fills)
                 if dupes:
                     print(f"成交去重：{len(dupes)} 笔重复回报/重复执行已跳过")

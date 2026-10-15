@@ -262,7 +262,10 @@ class TestQMTIntegrationGate:
             f"当前多传了{n_args - 9}个"
 
     def test_seq_vs_real_order_id_separation(self):
-        """请求序号和真实订单号分开存储"""
+        """客户端引用与真实订单号分开存储（2026-10-15 重写后契约）。
+
+        提交返回跟踪键=客户端引用（cr…，经 order_remark 关联）；真实订单号
+        由 on_stock_order 回调落账到 rec['oid']——提交时必须为空。"""
         from live import qmt_broker as qb
         import tempfile
         b = qb.QMTBroker(state_path=tempfile.mkdtemp() + '/q.json', enforce_window=False)
@@ -273,10 +276,18 @@ class TestQMTIntegrationGate:
         oid = b._submit_order(
             __import__('live.broker', fromlist=['Order']).Order('600000.SH', 'BUY', 0.01),
             100, 10.0)
-        assert oid.startswith('seq_'), f"提交返回的应是请求序号(seq_xxx)，实际: {oid}"
+        assert oid.startswith('cr'), f"提交返回的应是客户端引用(cr…)，实际: {oid}"
         rec = b._pending[oid]
-        assert 'real_order_id' not in rec or rec.get('real_order_id') is None, \
-            "提交时不应已有real_order_id"
+        assert rec.get('oid') is None, "提交时不应已有真实订单号"
+        assert rec.get('seq') == 12345, "请求序号应分开存储于 rec['seq']"
+
+        # 回调完成映射：order_remark=引用 → rec['oid']=真实订单号
+        class CbOrder:
+            order_id = '88888'
+            order_remark = oid
+            stock_code = '600000.SH'
+        b.on_stock_order(CbOrder())
+        assert b._pending[oid]['oid'] == '88888'
 
     def test_ledger_dedup_prevents_double_entry(self):
         """账本去重：同一trade_id不重复入账（R4）"""

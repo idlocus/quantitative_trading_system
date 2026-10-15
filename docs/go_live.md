@@ -22,7 +22,16 @@
 **资金**：总资金的 10-20%（如总100万→10-20万）
 
 **前置**：
-- [ ] QMT 阻断项全部修复（见 CLAUDE.md 已知限制）
+- [x] QMT 阻断项全部修复（2026-10-15 订单生命周期重写：
+      ① 客户端引用(order_remark)↔真实订单号映射——回调精确关联+兜底扫描，
+        替代旧的 seq_ 直查（永远匹配不上→成交丢失）与按 symbol 猜测（并发串单）；
+      ② 成交→入账原子化（R4）：先入账成功、后推进/清退台账，入账被阻则
+        台账保留待复核；sync_pending 同口径；execute 支持传入 ledger
+        （run_daily/run_live 已接线，ATOMIC_LEDGER_BOOKING）；
+      ③ 台账原子写（临时文件+os.replace），写一半崩溃不再截断旧台账；
+      ④ 8 参数官方签名 ✓（此前已修）；⑤ 查询-1 不可确认即阻断 ✓（此前已修）。
+      验证：tests/test_qmt_lifecycle_v2.py 9 项 + 既有生命周期测试。
+      **首实盘日仍需人工验证引用映射与成交回报日志**——模拟无法替代真实券商回报）
 - [ ] 完成券商程序化交易报备
 - [ ] `python scripts/preflight_check.py` 通过
 - [ ] `pytest -m release_gate` 通过

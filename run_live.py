@@ -321,7 +321,13 @@ def main():
             fills = broker.execute(orders, prices, as_of, prev_prices=prev,
                                    available_cash=ledger.cash,
                                    st_symbols=psig.exec_st_symbols,
-                                   positions=dict(ledger.positions))
+                                   positions=dict(ledger.positions),
+                                   **({'ledger': ledger}
+                                      if getattr(broker, 'ATOMIC_LEDGER_BOOKING', False)
+                                      else {}))
+            # QMT 已在 execute 内原子入账（ATOMIC_LEDGER_BOOKING）；此处
+            # 再跑一遍 apply_fills 幂等去重（trade_id 相同不重复入账），
+            # Paper 则在此首次入账。
             booked, dupes, blocked = ledger.apply_fills(fills)
             filled = [f for f in fills if f.quantity > 0]
             print(f"\n{args.execute.upper()} 成交 {len(filled)}/{len(orders)}"

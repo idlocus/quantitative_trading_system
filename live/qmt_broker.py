@@ -105,6 +105,8 @@ class QMTOrderState:
 
 
 class QMTBroker(Broker):
+    # 生产入账模式标记（run_daily/run_live 依此传 ledger 实现原子入账）
+    ATOMIC_LEDGER_BOOKING = True
     """
     miniQMT 实盘交易通道
 
@@ -267,11 +269,15 @@ class QMTBroker(Broker):
 
     def execute(self, orders: List[Order], prices: Dict[str, float],
                 trade_date, prev_prices=None, available_cash=None,
-                st_symbols=None, positions: Dict[str, int] = None) -> List[Fill]:
+                st_symbols=None, positions: Dict[str, int] = None,
+                ledger=None) -> List[Fill]:
         """
         执行订单列表（与 PaperBroker 接口一致；st_symbols 仅为接口对齐——
         实盘的涨跌停校验由券商端执行。positions 用于卖出数量合法化：
         零股一次性规则需要知道实际持仓）
+
+        ledger（生产必传，ATOMIC_LEDGER_BOOKING=True）：成交先入账、成功后
+        才清退在途台账（R4 原子性）；不传=非原子模式（仅测试用）。
 
         QMT 实盘流程：
         1. 交易控制状态检查（HALT_ALL→拒单；CLOSE_ONLY→过滤买入）
@@ -312,7 +318,7 @@ class QMTBroker(Broker):
 
         for order in sorted_orders:
             fill = self._execute_single(order, prices, trade_date, running_cash,
-                                        positions=positions)
+                                        positions=positions, ledger=ledger)
             fills.append(fill)
 
             # 更新运行时现金（含费用；部分成交同样占用/释放资金）
@@ -326,7 +332,8 @@ class QMTBroker(Broker):
 
     def _execute_single(self, order: Order, prices: Dict[str, float],
                         trade_date, running_cash: float,
-                        positions: Dict[str, int] = None) -> Fill:
+                        positions: Dict[str, int] = None,
+                        ledger=None) -> Fill:
         """
         单笔订单全生命周期：提交 → 等待（超时撤单）→ 增量入账。
 
@@ -373,62 +380,94 @@ class QMTBroker(Broker):
         status, traded, avg_px = self._await_order(oid, timeout=self.order_timeout,
                                                    cancel_on_timeout=True)
         return self._book_order_fill(order, oid, status, traded, avg_px,
-                                     price, qty, trade_date)
+                                     price, qty, trade_date, ledger=ledger)
 
     # ---- 订单生命周期原语（真实实现走 xtquant；测试注入假实现） ----
 
     def _submit_order(self, order: Order, qty: int, price: float) -> Optional[str]:
-        """提交委托，返回订单号并登记在途台账。
+        """提交委托，返回跟踪键（客户端引用）并登记在途台账。
 
-        XtQuant 正确参数（官方文档）：
-        - direction: STOCK_BUY=23 / STOCK_SELL=24（此前错误使用 0/1）
-        - price_type: LATEST_PRICE=5（最新价，接近市价；FIX_PRICE=11 是限价——
-          此前错误地把11当市价且 price_val=0 会被当作价格为0的限价单拒收）
-        - order_stock_async 返回的是请求序号（seq），非真实订单号——真实订单号
-          通过 on_stock_order 回调获取；此处将请求序号作为临时跟踪键，回调
-          更新后由 _query_order 按真实订单号查询。实盘首次接入时必须验证。
+        XtQuant 正确参数（官方文档，8 参数）：
+        - direction: STOCK_BUY=23 / STOCK_SELL=24
+        - price_type: LATEST_PRICE=5（最新价，接近市价；收盘竞价适用）
+        - order_remark: 预生成的客户端引用（cr…）——order_stock_async 返回的
+          是请求序号 seq，非真实订单号；真实订单号由 on_stock_order 回调
+          提供，回调对象的 order_remark 携带我们的引用完成关联
+          （2026-10-15 重写：旧版把 seq 当订单号去查询，永远匹配不上
+          真实订单 → 永远"已报未成交"→ 超时撤错单 → 成交丢失）。
         """
         direction = XT['STOCK_BUY'] if order.side == 'BUY' else XT['STOCK_SELL']
         price_type = XT['LATEST_PRICE']   # 最新价（接近市价；收盘竞价适用）
         price_val = 0                     # LATEST_PRICE 时 price=0
+        self._ref_counter = getattr(self, '_ref_counter', 0) + 1
+        ref = f'cr{int(time.time() * 1000) % 10**8:08d}{self._ref_counter:04d}'
         try:
-            # 官方API 8参数: account, stock_code, order_type, order_volume,
-            # price_type, price, strategy_name, order_remark
             ack = self._xt_trader.order_stock_async(
                 self._account, order.symbol, direction, qty, price_type,
-                price_val, '', '')  # strategy_name='', order_remark=''
+                price_val, 'quant', ref)   # strategy_name, order_remark=ref
         except Exception as e:
             logger.error(f"[QMT] 下单异常 {order.symbol}: {e}")
             return None
         if ack is None or ack == -1:
-            return None              # -1 = 下单请求被拒（此前只判None，-1会被当作有效订单号）
-        # ack 是请求序号（int），非真实订单号——作为临时跟踪键；
-        # 真实订单号由回调 on_stock_order(order) 提供，首实盘时必须验证映射
-        oid = f'seq_{ack}'
-        self._pending[oid] = {'symbol': order.symbol, 'side': order.side,
-                              'qty': int(qty), 'booked': 0, 'status': XT['ORDER_PENDING'],
-                              'submitted_at': str(datetime.now())}
+            return None              # -1 = 下单请求被拒
+        self._pending[ref] = {'symbol': order.symbol, 'side': order.side,
+                              'qty': int(qty), 'booked': 0,
+                              'status': XT['ORDER_PENDING'],
+                              'submitted_at': str(datetime.now()),
+                              'ref': ref, 'oid': None, 'seq': ack}
         self._save_state()
-        return oid
+        return ref
 
-    def _query_order(self, order_id) -> Tuple[int, int, float]:
-        """查询订单：(状态码, 已成交量, 成交均价)；查询接口异常返回 (-1, -1, 0)。
-        -1 状态=不可确认（区别于49=已报未成交）——调用方应视为 unknown 并阻断新委托。"""
+    # ---- 回调实现（xtquant 单参签名；见文件末"xtquant 回调"区，勿重复定义） ----
+
+    def _resolve_oid(self, tracking_key: str) -> Optional[str]:
+        """跟踪键（客户端引用）→ 真实订单号。
+
+        路径1：回调已落账（rec['oid']）；路径2：回调未达（断线/竞争）时
+        按 order_remark 扫描券商订单表兜底关联。解析失败返回 None
+        （调用方视为不可确认——绝不能拿引用号当订单号查询）。"""
+        rec = self._pending.get(tracking_key)
+        if rec is None:
+            return str(tracking_key)          # 本就是真实订单号（外部调用）
+        if rec.get('oid'):
+            return rec['oid']
         try:
             for o in (self._xt_trader.query_stock_orders(self._account) or []):
-                if str(o.order_id) == str(order_id):
+                if str(getattr(o, 'order_remark', '') or '') == str(tracking_key):
+                    rec['oid'] = str(o.order_id)
+                    self._save_state()
+                    return rec['oid']
+        except Exception as e:
+            logger.warning(f"[QMT] 引用号兜底关联查询失败 {tracking_key}: {e}")
+        return None
+
+    def _query_order(self, order_id) -> Tuple[int, int, float]:
+        """查询订单：(状态码, 已成交量, 成交均价)；不可确认返回 (-1, -1, 0)。
+
+        -1 状态=不可确认（引用未映射到真实订单号/接口异常/券商订单表查无）——
+        调用方应视为 unknown 并重试或阻断，绝不能当作"未成交"继续。"""
+        oid = self._resolve_oid(order_id)
+        if oid is None:
+            return -1, -1, 0.0
+        try:
+            for o in (self._xt_trader.query_stock_orders(self._account) or []):
+                if str(o.order_id) == str(oid):
                     return int(o.order_status), int(o.traded_volume or 0), \
                         float(o.traded_price or 0)
         except Exception as e:
             logger.warning(f"[QMT] 查询订单异常（不可确认状态）: {e}")
             return -1, -1, 0.0
-        return 49, 0, 0.0
+        return -1, -1, 0.0     # 查无此单：可能尚未报到（回调竞争）→ 不可确认
 
     def _cancel_order(self, order_id) -> bool:
+        oid = self._resolve_oid(order_id)
+        if oid is None:
+            logger.error(f"[QMT] 撤单失败：引用 {order_id} 未映射到真实订单号")
+            return False
         try:
-            return self._xt_trader.cancel_order_stock_async(self._account, order_id) == 0
+            return self._xt_trader.cancel_order_stock_async(self._account, oid) == 0
         except Exception as e:
-            logger.warning(f"[QMT] 撤单失败 {order_id}: {e}")
+            logger.warning(f"[QMT] 撤单失败 {oid}: {e}")
             return False
 
     def _await_order(self, order_id, timeout: float = 30, cancel_on_timeout=True):
@@ -452,15 +491,19 @@ class QMTBroker(Broker):
         return status, traded, px
 
     def _book_order_fill(self, order: Order, oid, status, traded, avg_px,
-                         ref_price, qty, trade_date) -> Fill:
-        """增量入账：本次已成交 − 台账已入账；trade_id=oid#累计量（重放幂等）"""
+                         ref_price, qty, trade_date, ledger=None) -> Fill:
+        """增量入账：本次已成交 − 台账已入账；trade_id=oid#累计量（重放幂等）。
+
+        原子性（R4，2026-10-15 重写）：传入 ledger 时**先入账、成功后**才推进
+        台账 booked/booked_cost 并清退终态记录——入账前崩溃则台账仍是旧值，
+        sync_pending 重启后按未入账差额补记（旧版先清退后入账，中间崩溃
+        =成交永久丢失）。入账被阻（超额卖出防线等）→ 台账不推进、记录保留，
+        由账本异常队列 + L2.6 闸门接管。"""
         rec = self._pending.get(oid) or {'symbol': order.symbol,
                                          'side': order.side, 'qty': int(qty),
                                          'booked': 0}
         prev = int(rec.get('booked', 0))
         delta = int(traded) - prev
-        rec.update({'booked': int(traded), 'status': int(status),
-                    'qty': int(qty), 'symbol': order.symbol, 'side': order.side})
 
         if int(traded) >= int(qty) > 0 or status == QMTOrderState.FILLED:
             status_str = 'filled'
@@ -474,6 +517,7 @@ class QMTBroker(Broker):
             status_str = f'open({status})'    # 撤单中/在途，残量由 sync_pending 补记
 
         px = float(avg_px) if avg_px and avg_px > 0 else float(ref_price)
+        booking_ok = True
         if delta > 0 and px > 0:
             # 增量价格：用累计成本差除以增量数量（券商返回的是累计均价，
             # 直接用于增量段会高估/低估部分成交的实际成交价）
@@ -488,13 +532,30 @@ class QMTBroker(Broker):
             commission, taxes = _est_fees(order.side, value)
             fill = Fill(order, incr_px, delta, commission, taxes, trade_date,
                         status_str, trade_id=f'{oid}#{int(traded)}')
-            rec['booked_cost'] = total_cost       # 更新累计成本供下次增量计算
+            if ledger is not None:
+                booked, _dupes, _blocked = ledger.apply_fills([fill])
+                if not booked:
+                    booking_ok = False
+                    fill = Fill(order, incr_px, 0, 0, 0, trade_date,
+                                status_str + '(入账被阻，台账保留待复核)')
+                    logger.error(f"[QMT] 成交入账被阻 {oid} delta={delta}——"
+                                 f"台账不推进，账本异常队列接管")
         else:
             fill = Fill(order, px, 0, 0, 0, trade_date, status_str)
-        # 台账清退：FILLED/REJECTED 即清；CANCELLED 保留至 sync_pending 复核一次
-        # （撤单瞬间可能仍有成交残量，次日查询后由 sync_pending 清退；TTL 3天兜底）
-        if status in (QMTOrderState.FILLED, QMTOrderState.REJECTED):
-            self._pending.pop(oid, None)
+
+        if booking_ok:
+            # 入账成功（或无新增量）才推进台账与清退终态
+            rec.update({'booked': int(traded), 'status': int(status),
+                        'qty': int(qty), 'symbol': order.symbol,
+                        'side': order.side})
+            if delta > 0 and px > 0:
+                rec['booked_cost'] = float(traded) * px
+            # 台账清退：FILLED/REJECTED 即清；CANCELLED 保留至 sync_pending
+            # 复核一次（撤单瞬间可能仍有成交残量；TTL 3天兜底）
+            if status in (QMTOrderState.FILLED, QMTOrderState.REJECTED):
+                self._pending.pop(oid, None)
+        else:
+            rec['status'] = int(status)   # booked/booked_cost 不推进
         self._save_state()
         return fill
 
@@ -537,10 +598,12 @@ class QMTBroker(Broker):
                 booked, _dupes, _blocked = ledger.apply_fills([fill])
                 if booked:
                     booked_fills.extend(booked)
-                rec['booked'] = int(traded)
+                    rec['booked'] = int(traded)   # 入账成功才推进（R4 原子性）
+                # 入账被阻：booked 不推进，记录保留待下次同步/人工复核
             rec['status'] = int(status)
             if status in (QMTOrderState.FILLED, QMTOrderState.CANCELLED,
-                          QMTOrderState.REJECTED):
+                          QMTOrderState.REJECTED) and \
+                    int(rec.get('booked', 0)) >= int(traded):
                 self._pending.pop(oid, None)
         self._save_state()
         if booked_fills:
@@ -559,10 +622,17 @@ class QMTBroker(Broker):
         return {}
 
     def _save_state(self):
+        """原子持久化：先写临时文件再 os.replace（同卷原子）。
+
+        直接 open('w') 写一半崩溃会截断 JSON → _load_state 静默重建空台账
+        = 在途订单全部遗忘 = 重复下单/成交丢失（评审阻断项#5，R4）。
+        """
         try:
             os.makedirs(os.path.dirname(os.path.abspath(self.state_path)), exist_ok=True)
-            with open(self.state_path, 'w', encoding='utf-8') as f:
+            tmp = self.state_path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(self._pending, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, self.state_path)
         except Exception as e:
             # 实盘台账写入失败=丢失在途订单跟踪 → 重复下单风险，必须阻断
             logger.error(f"[QMT] 在途台账保存失败（实盘安全风险）: {e}")
@@ -594,7 +664,7 @@ class QMTBroker(Broker):
             logger.error(f"[QMT] 批量撤单失败: {e}")
         return count
 
-    # ==================== xtquant 回调 ====================
+    # ==================== xtquant 回调（单参签名，register_callback(self) 注入） ====================
 
     def on_disconnected(self):
         """连接断开回调"""
@@ -602,26 +672,61 @@ class QMTBroker(Broker):
         logger.warning("[QMT] 连接断开")
 
     def on_stock_order(self, order):
-        """订单状态推送回调——请求序号→真实订单号的映射在此完成"""
-        logger.info(f"[QMT] 订单推送: {order.stock_code} 状态={order.order_status} "
-                    f"成交量={order.traded_volume} 订单号={getattr(order, 'order_id', '?')}")
-        # 将真实订单号关联到台账中的请求序号记录（实盘首日验证此映射）
-        real_id = str(getattr(order, 'order_id', '') or '')
-        if real_id:
-            for oid, rec in self._pending.items():
-                if oid.startswith('seq_') and rec.get('symbol') == order.stock_code:
-                    rec['real_order_id'] = real_id
+        """委托回报：order_remark(客户端引用) → 真实订单号 映射落账。
+
+        2026-10-15 重写：旧版按 symbol 猜测关联 seq_ 记录（同标的并发单
+        会串单）。现以 order_remark=客户端引用精确关联；remark 缺失时
+        退化按 symbol+无oid 记录匹配（兼容旧台账）。"""
+        try:
+            logger.info(f"[QMT] 订单推送: {getattr(order, 'stock_code', '')} "
+                        f"状态={getattr(order, 'order_status', '?')} "
+                        f"成交量={getattr(order, 'traded_volume', '?')} "
+                        f"订单号={getattr(order, 'order_id', '?')}")
+            oid = str(getattr(order, 'order_id', '') or '')
+            if not oid:
+                return
+            remark = str(getattr(order, 'order_remark', '') or '')
+            rec = self._pending.get(remark)
+            if rec is not None:
+                if rec.get('oid') != oid:
+                    rec['oid'] = oid
                     self._save_state()
-                    break
+                    logger.info(f"[QMT] 订单映射 {remark} → {oid}")
+                return
+            # 兼容路径：无 remark（旧台账/外部单）——仅对尚无 oid 的同标的记录
+            for key, r in self._pending.items():
+                if r.get('oid') is None and r.get('symbol') == getattr(order, 'stock_code', ''):
+                    r['oid'] = oid
+                    self._save_state()
+                    logger.warning(f"[QMT] 无remark退化匹配 {key} → {oid}（按symbol）")
+                    return
+        except Exception as e:
+            logger.error(f"[QMT] on_stock_order 回调处理失败: {e}")
 
     def on_stock_trade(self, trade):
-        """成交推送回调"""
-        logger.info(f"[QMT] 成交推送: {trade.stock_code} 价格={trade.traded_price} "
-                    f"数量={trade.traded_volume}")
+        """成交回报：留痕（成交量真相以查询接口为准，避免双计数）。"""
+        logger.info(f"[QMT] 成交推送: {getattr(trade, 'stock_code', '')} "
+                    f"价格={getattr(trade, 'traded_price', '?')} "
+                    f"数量={getattr(trade, 'traded_volume', '?')} "
+                    f"订单={getattr(trade, 'order_id', '?')}")
 
     def on_order_error(self, order_error):
-        """订单错误回调"""
-        logger.error(f"[QMT] 订单错误: {order_error.order_id} {order_error.error_msg}")
+        """订单错误回调：标记对应台账记录，交由 sync_pending/人工复核。
+
+        order_error.order_id 可能是请求序号（下单失败）或真实订单号
+        （报价被拒）——两者都尝试关联。"""
+        try:
+            eid = str(getattr(order_error, 'order_id', ''))
+            msg = str(getattr(order_error, 'error_msg', getattr(order_error, 'error', '')))
+            logger.error(f"[QMT] 订单错误: {eid} {msg}")
+            for key, rec in self._pending.items():
+                if str(rec.get('seq')) == eid or str(rec.get('oid')) == eid:
+                    rec['status'] = QMTOrderState.REJECTED
+                    rec['error'] = msg
+                    self._save_state()
+                    return
+        except Exception as e:
+            logger.error(f"[QMT] on_order_error 回调处理失败: {e}")
 
     def on_cancel_error(self, cancel_error):
         """撤单错误回调"""
