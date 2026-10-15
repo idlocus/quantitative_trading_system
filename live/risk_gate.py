@@ -212,19 +212,21 @@ class RiskGate:
         d.action, d.exposure = action, exposure
 
         # L3.1 空仓死锁/停机语义：
-        #  a) scale+空仓：预算制下不应发生，作为安全网锚重置（现金为新起点）
+        #  a) scale+空仓：止损清空/覆盖崩塌导致空仓且深度缩量——不重置锚。
+        #     （2026-10-15 E2E 暴露：此处锚重置+满仓恢复会使回撤按"锚分段"计算，
+        #       每段<硬限而累计可无限深——十年重放实测 B 口径累计 -24.9% 未熔断。
+        #       生产语义：回撤锚只在显式重启时重置，否则始终锚定全程峰值，
+        #       硬限因此约束的是累计回撤。）
         #  b) liquidate+空仓：硬限清仓完成。默认=停机等待人工决策（硬限=停止
         #     是设计意图，静默持币2.5年不是）；restart_after_liquidation=True
         #     时锚重置自动重启（研究对照模式）。两种路径都留痕。
         if hasattr(ledger, 'positions') and not ledger.positions:
             nav_now = ledger.last_nav() or ledger.cash
             if action == 'scale' and exposure < 0.15 and nav_now > 0:
-                self._state['dd_anchor'] = nav_now
-                d.reasons.append(f'[L3] 空仓死锁解除：回撤锚重置为当前净值 {nav_now:,.0f}'
-                                 '（现金为新起点，创新高后自动失效）')
-                action, exposure = 'trade', 1.0
-                d.action, d.exposure = action, exposure
-            elif action == 'liquidate' and nav_now > 0:
+                d.reasons.append('[L3] 空仓且深度缩量（止损清空/覆盖崩塌）：'
+                                 '回撤锚保持全程峰值不重置——回撤触顶硬限时停机，'
+                                 '恢复买入按当前缩量敞口执行')
+            if action == 'liquidate' and nav_now > 0:
                 if self.cfg.restart_after_liquidation:
                     self._state['dd_anchor'] = nav_now
                     d.reasons.append(f'[L3] 清仓后自动重启：回撤锚重置为 {nav_now:,.0f}'

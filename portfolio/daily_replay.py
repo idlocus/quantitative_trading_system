@@ -265,7 +265,12 @@ class DailyReplayBacktester:
 
                     fills = broker.execute(exec_orders, prices, Td, prev_prices=prev_prices,
                                            available_cash=ledger.cash,
-                                           st_symbols=self._st_set_at(T))
+                                           st_symbols=self._st_set_at(T),
+                                           positions=dict(ledger.positions))
+                    # positions 必传（与 run_daily/run_live 同口径）：卖出数量经
+                    # round_sell_qty 钳制到实际持仓。漏传时金额制全仓卖单会因
+                    # 滑点+费用膨胀出 1~4 股超额 → 账本异常队列 → L2.6 永久禁买，
+                    # 重放从首次调仓起就锁死在只卖不买（2026-10-15 十年回测教训）。
                     ledger.apply_fills(fills)
                     if debug_from and str(Td) >= debug_from:
                         st = {}

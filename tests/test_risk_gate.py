@@ -309,22 +309,28 @@ class TestScaleDeadlockFix:
         total = sum(o.amount for o in buys)
         assert total <= d.exposure * 1_000_000 * 1.01   # 预算基准=cash+市值=100万
 
-    def test_empty_position_deadlock_releases_anchor(self, tmp_path):
-        """空仓死锁解除：空仓+深回撤缩量 → 锚重置为当前净值，恢复买入能力"""
-        # 渐进下跌至 dd≈14.5%（exposure<15% 触发锚重置；单日<7%）
+    def test_empty_position_keeps_anchor(self, tmp_path):
+        """空仓不重置回撤锚（2026-10-15 修复）。
+
+        旧版在 scale+空仓 时锚重置+恢复 trade/1.0，导致回撤按"锚分段"计算：
+        每段 <15% 硬限而累计可无限深（E2E 实测 -26.3% 未熔断、十年重放
+        B口径累计 -24.9% 未熔断）。10-12 的缩量死锁已由预算制单独修复，
+        锚重置属过度保险，现删除：回撤锚只在显式 restart 时重置。"""
+        # 渐进下跌至 dd≈14.5%（scale 且 exposure<15%；单日<7%）
         led = self._ledger(tmp_path, [1_000_000, 970_000, 945_000, 920_000,
                                       900_000, 880_000, 865_000, 855_000])
         orders = [Order('S001.SH', 'BUY', 0.01, amount=9000)]
         gate = RiskGate(state_path=str(tmp_path / 'rs.json'))
         d = gate.review(orders, led, {'S001.SH': 10.0}, {'S001.SH': 10.0},
                         [], bench_df=self._bench(), as_of=date(2026, 10, 8))
-        assert any('空仓死锁解除' in r for r in d.reasons)
-        assert d.action == 'trade'          # 锚重置后恢复交易
-        # 锚持久化：新实例下一次 review 仍以锚为回撤基准
+        assert any('回撤锚保持' in r for r in d.reasons)
+        assert d.action == 'scale'          # 不再恢复 trade
+        assert d.exposure < 0.15            # 缩量敞口保持，不回满仓
+        # 锚未写入状态：新实例回撤仍按全程峰值计算（≈14.5%）
         gate2 = RiskGate(state_path=str(tmp_path / 'rs.json'))
         d2 = gate2.review(orders, led, {'S001.SH': 10.0}, {'S001.SH': 10.0},
                           [], bench_df=self._bench(), as_of=date(2026, 10, 8))
-        assert d2.drawdown < 0.01           # 锚=当前净值 → 回撤≈0
+        assert d2.drawdown > 0.14
 
 
 class TestLiquidateTerminalSemantics:

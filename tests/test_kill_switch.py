@@ -15,6 +15,21 @@ from live.ledger import Ledger
 from live.broker import Order
 
 
+@pytest.fixture(autouse=True)
+def _restore_switch_globals():
+    """恢复 kill_switch/trading_switch 的模块级路径全局。
+
+    测试内重定向 KILL_FILE/STATE_FILE 到 tmp_path 后若不恢复，会泄漏到
+    同会话后续测试文件（qmt_broker.execute 经 effective_state 读到残留
+    CLOSE_ONLY → 买入被滤 → IndexError）。2026-10-15 全量套件
+    test_qmt_lifecycle 顺序失败的根因即此。"""
+    import scripts.kill_switch as ks
+    import scripts.trading_switch as ts
+    orig = (ks.KILL_FILE, ts.STATE_FILE)
+    yield
+    ks.KILL_FILE, ts.STATE_FILE = orig
+
+
 class TestKillSwitch:
 
     def test_kill_and_unkill(self, tmp_path):
