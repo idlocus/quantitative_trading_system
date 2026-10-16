@@ -58,3 +58,71 @@ def profit_notice_events(ds, d0, d1) -> pd.DataFrame:
                 f"（+{int((df.direction > 0).sum())}/-{int((df.direction < 0).sum())}）"
                 if not df.empty else f"[events] 业绩预告事件 {d0}~{d1}: 0 条")
     return df
+
+
+def sue_events(ds, d0, d1, min_abs_est_wan=1000.0) -> pd.DataFrame:
+    """一致预期超预期（SUE）事件：实际归母净利 vs 公告前最后一致预期。
+
+    口径（实测 2026-10-16）：
+      - AShareIncome.NET_PROFIT_EXCL_MIN_INT_INC 单位=元；同报告期多行
+        （多报表口径+更正公告）→ 取首次公告日、该日最大值（合并归母）
+      - AShareConsensusData.NET_PROFIT_AVG 单位=万元 → 统一换算到万元
+      - 预期取 EST_DT < 公告日 的最后一条非空快照
+    surprise = (实际-预期)/|预期|，clip ±300%；|预期|<min_abs_est_wan 剔除
+    （微小分母会产生虚假巨大 SUE）。
+
+    Returns: DataFrame[symbol, ann_date, period, surprise, actual_wan, est_wan]
+    """
+    cur = ds._db_src()._cursor()
+    cur.execute(
+        "SELECT S_INFO_WINDCODE, REPORT_PERIOD, ANN_DT, NET_PROFIT_EXCL_MIN_INT_INC "
+        "FROM AShareIncome WHERE ANN_DT >= :d0 AND ANN_DT <= :d1 "
+        "AND NET_PROFIT_EXCL_MIN_INT_INC IS NOT NULL",
+        {'d0': d0.strftime('%Y%m%d'), 'd1': d1.strftime('%Y%m%d')})
+    inc = pd.DataFrame(cur.fetchall(),
+                       columns=['symbol', 'period', 'ann_dt', 'np'])
+    if inc.empty:
+        return pd.DataFrame()
+    inc['ann_dt'] = inc['ann_dt'].astype(str)
+    # 首次公告日（同报告期多次披露/更正取最早）
+    first_ann = inc.groupby(['symbol', 'period'])['ann_dt'].min()
+    inc = inc.set_index(['symbol', 'period']).join(first_ann.rename('first'), on=None)
+    inc = inc.reset_index()
+    inc = inc[inc.ann_dt == inc['first']]
+    # 同日多口径行 → 取最大值（合并归母；茅台实测 74,734M 为最大=归母）
+    actual = inc.groupby(['symbol', 'period', 'ann_dt'])['np'].max().reset_index()
+    actual['actual_wan'] = actual['np'] / 1e4           # 元 → 万元
+    actual = actual.drop(columns='np')
+
+    # 一致预期（EST_REPORT_DT 对应报告期；仅取所需列压内存）
+    periods = sorted(set(actual.period))
+    est_rows = []
+    B = 400
+    for i in range(0, len(periods), B):
+        ph = ','.join(f':p{j}' for j in range(min(B, len(periods) - i)))
+        cur.execute(
+            f"SELECT S_INFO_WINDCODE, EST_REPORT_DT, EST_DT, NET_PROFIT_AVG "
+            f"FROM AShareConsensusData WHERE EST_REPORT_DT IN ({ph}) "
+            f"AND NET_PROFIT_AVG IS NOT NULL",
+            {f'p{j}': p for j, p in enumerate(periods[i:i + B])})
+        est_rows.extend(cur.fetchall())
+    est = pd.DataFrame(est_rows, columns=['symbol', 'period', 'est_dt', 'est_wan'])
+    if est.empty:
+        return pd.DataFrame()
+    est['est_dt'] = est['est_dt'].astype(str)
+
+    # 公告前最后快照
+    m = actual.merge(est, on=['symbol', 'period'], how='left')
+    m = m[(m.est_dt.notna()) & (m.est_dt < m.ann_dt)]
+    m = m.sort_values(['symbol', 'period', 'ann_date' if 'ann_date' in m.columns else 'ann_dt', 'est_dt'])
+    last_est = m.groupby(['symbol', 'period', 'ann_dt']).tail(1)
+
+    last_est['surprise'] = (
+        (last_est.actual_wan - last_est.est_wan) / last_est.est_wan.abs()
+    ).clip(-3.0, 3.0)
+    out = last_est[last_est.est_wan.abs() >= min_abs_est_wan].copy()
+    out['ann_date'] = pd.to_datetime(out.ann_dt, format='%Y%m%d', errors='coerce')
+    out = out[out.ann_date.notna()]
+    logger.info(f"[events] SUE事件 {d0}~{d1}: {len(out)} 条")
+    return out[['symbol', 'ann_date', 'period', 'surprise',
+                'actual_wan', 'est_wan']]
