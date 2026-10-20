@@ -16,6 +16,8 @@ import pandas as pd
 from datetime import date
 from typing import List, Optional
 
+import os
+
 import oracledb
 import akshare as ak
 
