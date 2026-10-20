@@ -65,6 +65,13 @@ def main():
         print(f"⚠️ 告警已发：失败步骤 {failed}")
         sys.exit(1)
 
+    if hb.get('stale_data'):
+        alert('PAPER_STALE_DATA', 'P1',
+              f"心跳标记数据陈旧（data_max_date={hb.get('data_max_date')}）——"
+              f"净值冻结风险，检查 Wind 终端")
+        print(f"⚠️ 告警已发：数据陈旧 {hb.get('data_max_date')}")
+        sys.exit(1)
+
     print(f"✅ 心跳正常 @{hb.get('at')} | stock={hb.get('stock_nav')} "
           f"etf={hb.get('etf_nav')}")
 
