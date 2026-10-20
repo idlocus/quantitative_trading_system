@@ -197,7 +197,8 @@ class JournalWriter:
                       "或运行 `python run_live.py --statement-template`", ""]
 
         # 收盘点评
-        lines += self._closing_comment(ds, as_of, prices_prev, prices_today)
+        lines += self._closing_comment(ds, as_of, prices_prev, prices_today,
+                                       fills=fills)
 
         with open(self.path, 'a', encoding='utf-8') as f:
             f.write("\n".join(lines))
@@ -519,7 +520,8 @@ class JournalWriter:
             lines += [f"- 环境评分不可用：{e}", ""]
         return lines
 
-    def _closing_comment(self, ds, as_of, prices_prev, prices_today) -> List[str]:
+    def _closing_comment(self, ds, as_of, prices_prev, prices_today,
+                         fills=None) -> List[str]:
         """收盘点评：事实+计算的自动观察（非主观渲染）"""
         lines = ["## 七、收盘点评", ""]
         try:
