@@ -129,8 +129,8 @@ def validate():
 
 # ---- 约束覆盖范围声明（回测 vs 实盘的诚实对照） ----
 # 回测有/实盘无的约束（回测曲线因此更平滑/回撤更浅）
-# 回测有/实盘无的约束（vol_target/max_turnover/min_cash_ratio 已统一到 GateConfig，
-# 但 gate 尚未主动执行缩仓/换手回缩/现金底线——值已同源，执行差异由重放口径覆盖）
+# vol_target/max_turnover/min_cash_ratio 已统一到 GateConfig 且闸门
+# 实际执行（commit d85c0a7 组合约束执行层）——回测与实盘同源同执行。
 BACKTEST_ONLY = ['max_sector_weight', 'max_position_weight']
 # 实盘有/回测无的约束（回测因此保留本该砍掉的仓位）
 LIVE_ONLY = ['stop_loss_pct']

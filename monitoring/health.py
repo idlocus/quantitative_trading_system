@@ -42,12 +42,16 @@ def generate_health_report(ledger, signal_info: dict = None,
         'signal': {},
         'reconciliation': {},
         'ledger': {},
+        'style': {},
     }
 
     issues = []
 
     # ---- 数据源状态 ----
     report['providers'] = _check_providers()
+
+    # ---- 风格暴露观测（B3：观测不拦截，区分风格逆风与系统故障） ----
+    report['style'] = _style_exposure(ledger)
 
     # ---- 因子覆盖率 ----
     if factor_coverages:
@@ -194,3 +198,76 @@ if __name__ == '__main__':
     led = Ledger(led_path)
     report = generate_health_report(led)
     print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+def _style_exposure(ledger) -> dict:
+    """风格暴露观测（B3，2026-10-20，评审P1-1方案1采纳）。
+
+    观测不拦截——目的是让"风格逆风期"与"系统故障"可区分。
+    指标：行业偏离度（组合 vs 全宇宙等权的总变差）、规模分位
+    （持仓中位市值在宇宙的分位）、超配/低配头部行业。
+    数据：PIT 万得 L2 行业 + S_VAL_MV（万元）。"""
+    try:
+        from data.layered import LayeredDataSource
+        from data.industry_pit import industry_classification, industry_names
+        ds = LayeredDataSource()
+        holds = dict(ledger.positions)
+        if not holds:
+            return {'status': 'empty', 'note': '无持仓'}
+        universe = sorted(ds.list_symbols())
+        cls = industry_classification(ds, universe, date.today())
+        names = industry_names(ds, level=2)
+        from collections import Counter
+        port_cnt = Counter()
+        uni_cnt = Counter()
+        for s in holds:
+            if s in cls:
+                port_cnt[cls[s]] += 1
+        for s in universe:
+            if s in cls:
+                uni_cnt[cls[s]] += 1
+        tot_p, tot_u = sum(port_cnt.values()), sum(uni_cnt.values())
+        if not tot_p or not tot_u:
+            return {'status': 'n/a', 'note': '行业分类不可用'}
+        codes = set(port_cnt) | set(uni_cnt)
+        wp = {c: port_cnt.get(c, 0) / tot_p for c in codes}
+        wu = {c: uni_cnt.get(c, 0) / tot_u for c in codes}
+        tv = sum(abs(wp[c] - wu[c]) for c in codes) / 2      # 总变差 0~1
+        over = sorted(codes, key=lambda c: wp[c] - wu[c], reverse=True)[:3]
+        under = sorted(codes, key=lambda c: wp[c] - wu[c])[:3]
+
+        # 规模分位（S_VAL_MV 万元）
+        try:
+            cur = ds._db_src()._cursor()
+            cur.execute(
+                "SELECT S_INFO_WINDCODE, S_VAL_MV FROM AShareEODDerivativeIndicator "
+                "WHERE TRADE_DT=(SELECT MAX(TRADE_DT) FROM AShareEODDerivativeIndicator) "
+                "AND S_VAL_MV IS NOT NULL")
+            caps = dict(cur.fetchall())
+            if caps:
+                import numpy as np
+                vals = sorted(caps.values())
+                med_uni = vals[len(vals) // 2]
+                hcap = [caps[s] for s in holds if s in caps]
+                pct = float(np.mean([c < med_uni for c in hcap])) if hcap else None
+                size_note = (f"持仓中位市值分位 {pct:.0%}（<50%=偏大盘）"
+                             if pct is not None else '规模数据不足')
+            else:
+                size_note = '市值数据不可用'
+        except Exception:
+            size_note = '市值查询失败'
+
+        return {
+            'status': 'ok',
+            'industry_deviation': round(tv, 3),
+            'industry_deviation_note': f"总变差 {tv:.0%}（组合 vs 宇宙等权）",
+            'top_overweight': [{'industry': names.get(c, c),
+                                'w_port': round(wp[c], 3),
+                                'w_universe': round(wu[c], 3)} for c in over],
+            'top_underweight': [{'industry': names.get(c, c),
+                                 'w_port': round(wp[c], 3),
+                                 'w_universe': round(wu[c], 3)} for c in under],
+            'size_percentile': size_note,
+        }
+    except Exception as e:
+        return {'status': 'error', 'note': str(e)[:80]}

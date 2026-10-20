@@ -140,7 +140,15 @@ class WindDBDataSource:
         S_DQ_VOLUME/S_DQ_AMOUNT 的原表单位未验证——amount 原样直通不做换算，
         列结构与 A 股路径对齐（含 amount 列）。若未来接入港股主链，必须先实证
         单位并在 data/turnover.py 统一口径，禁止直接进入成交额计算。
+
+        主链硬隔离（2026-10-20，B4）：默认拒绝，仅显式 opt-in 可用——
+        防止港股代码经任何路径静默进入 generate_target/成交额计算。
         """
+        if os.environ.get('ALLOW_HK_KLINE') != '1':
+            raise NotImplementedError(
+                f"港股K线已隔离（单位未实证，禁止进主链）。symbol={symbol}。"
+                f"如确需取数：环境变量 ALLOW_HK_KLINE=1 显式开启，且接入主链前"
+                f"必须先在 data/turnover.py 统一单位口径（见上方说明）。")
         try:
             sql = """
                 SELECT
