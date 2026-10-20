@@ -1,0 +1,30 @@
+{
+ "cash": 300000.0,
+ "positions": {},
+ "cost": {},
+ "trades": [],
+ "nav_history": [
+  {
+   "date": "2026-10-15",
+   "nav": 300000.0,
+   "cash": 300000.0,
+   "market_value": 0.0
+  }
+ ],
+ "meta": {
+  "created": "2026-10-15",
+  "last_prices": {},
+  "schema_version": 1
+ },
+ "cash_log": [
+  {
+   "date": "2026-10-15",
+   "type": "deposit",
+   "amount": 300000.0,
+   "ref": "初始入金",
+   "note": ""
+  }
+ ],
+ "events": [],
+ "exceptions": []
+}

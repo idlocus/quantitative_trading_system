@@ -40,7 +40,7 @@ def main():
     args = ap.parse_args()
 
     ledger = Ledger(LEDGER_PATH)
-    if not ledger._d.get('initialized'):
+    if not ledger._d.get('trades') and not ledger._d.get('cash'):
         ledger.initialize(chain.ETF_SLEEVE_CAPITAL)
         print(f"ETF sleeve 账本初始化: {chain.ETF_SLEEVE_CAPITAL:,.0f}")
 

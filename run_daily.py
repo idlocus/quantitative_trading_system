@@ -18,9 +18,13 @@
 """
 
 import argparse
+import logging
 import os
 import sys
 from datetime import date, timedelta
+
+logger = logging.getLogger(__name__)   # 健康报告异常分支引用（曾未定义——
+                                       # 触发时 NameError 掩盖原始错误，pyflakes 门槛抓回）
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

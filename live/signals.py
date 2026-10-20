@@ -135,6 +135,10 @@ def generate_target(ds: LayeredDataSource, as_of: date,
     # ---- v2 质量过滤（ROE>8% + 杠杆<65%，作为筛选而非权重） ----
     # 契约校验：PIT杠杆是百分比(D/E%)，阈值65.0 不是资产/权益倍数3.0
     from data.contracts import get_factor_contract, validate_factor_matrix
+    from data.fundamental_pit import PITFinancialProvider
+    pit = PITFinancialProvider(ds)   # 2026-10-15 依赖重接线时误删此行，
+                                     # paper验证期首跑抓回（合成数据测试路径
+                                     # 在覆盖率闸门早退，覆盖不到此分支）
     qf = chain.QUALITY_FILTER
 
     if qf.get('roe_min') is not None:

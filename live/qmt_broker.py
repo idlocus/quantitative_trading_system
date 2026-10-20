@@ -29,9 +29,12 @@ import json
 import os
 import time
 from datetime import date, datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from .broker import Order, Fill, Broker
+
+if TYPE_CHECKING:      # 注解引用（防循环导入；pyflakes 可解析）
+    from live.reconcile import BrokerStatement
 
 from utils.logger import get_logger
 
@@ -234,6 +237,8 @@ class QMTBroker(Broker):
         """
         拉取券商对账单（账实核对基准）：
         资金 + 持仓 + 当日成交流水（含成交回报ID，供对账去重）。
+        （返回类型 live.reconcile.BrokerStatement——模块底部运行时导入，
+        此处字符串注解防循环依赖；pyflakes 白名单见 conftest 之外说明）
 
         需要 QMT 客户端运行中；未连接时抛 RuntimeError。
         """
