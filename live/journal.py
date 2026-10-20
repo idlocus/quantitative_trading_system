@@ -538,7 +538,25 @@ class JournalWriter:
                      if prices_prev.get(s, 0) > 0 and
                      prices_today.get(s, 0) / prices_prev.get(s, 0) - 1 > 0)
             lines += [f"- 持仓上涨 {up}/{len(self.ledger.positions)}"]
-        lines += ["- 数据/执行异常：无（异常将在此列出）",
+        # 拒单分类（2026-10-20：带宽边缘碎单与科创板高价属预期行为，
+        # 不再裸列吓人——收盘点评明确标注；其余拒单仍算异常上浮）
+        dust = sum(1 for f in fills if '不足最低申报' in str(getattr(f, 'status', '')))
+        star_min = sum(1 for f in fills
+                       if '不足最低申报' in str(getattr(f, 'status', ''))
+                       and str(getattr(f, 'order', None) and f.order.symbol).startswith('688'))
+        others = sum(1 for f in fills
+                     if 'rejected' in str(getattr(f, 'status', ''))
+                     and '不足最低申报' not in str(getattr(f, 'status', '')))
+        anomaly = []
+        if dust:
+            note = f"碎单拒单 {dust} 笔（带宽边缘零头<1手，正常跳过"
+            if star_min:
+                note += f"；其中科创板高价 {star_min} 笔=最低申报200股超预算，已知限制"
+            note += "）"
+            anomaly.append(note)
+        if others:
+            anomaly.append(f"其他拒单 {others} 笔（跌停/资金等，需关注）")
+        lines += [f"- 数据/执行异常：{'；'.join(anomaly) if anomaly else '无'}",
                   f"- 明日：{'调仓日（盘前生成新指令）' if self._is_rebalance_due() else '持有观察（缓冲带内）'}",
                   ""]
         return lines
