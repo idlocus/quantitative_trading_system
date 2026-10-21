@@ -20,11 +20,14 @@ from trading import config as chain
 from trading.strategy import build_strategy_score, _build_momentum_matrix
 
 START, END = date(2016, 6, 1), date(2026, 10, 9)
-SIGNAL_START = date(2017, 1, 1)
+SIGNAL_START = date(2017, 1, 3)   # 首个交易日（非假期）——DB路径可用；
+                                   # 旧实验用1月1日（假期）静默走了WindPy回退，
+                                   # 对终端形成隐藏依赖（2026-10-21发现）
 
 ds = LayeredDataSource()
 pool = sorted(ds.list_symbols(as_of=SIGNAL_START))
 score, cache, _ = build_strategy_score(ds, pool, START, END)
+assert score.shape[1] > 100, f'池异常: {score.shape}'   # 空池硬门禁
 print(f"分数矩阵: {score.shape}", flush=True)
 
 # 动量与均线（复权口径）
