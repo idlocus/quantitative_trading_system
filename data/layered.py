@@ -493,9 +493,18 @@ class LayeredDataSource:
                 if rows:
                     logger.info(f"[layered] PIT universe (DB) @{d}: {len(rows)}")
                     return sorted(rows)
+                logger.error(f"[layered] PIT universe (DB) @{d}: 0 行——"
+                             "行情表该日无数据，回退客户端")
             except Exception as e:
                 logger.warning(f"[layered] DB PIT 失败，回退客户端: {e}")
-        return self._client_src().list_symbols(as_of=as_of or date.today())
+        syms = self._client_src().list_symbols(as_of=as_of or date.today())
+        if not syms:
+            # 空池是数据层故障（DB+客户端双失败），静默返回空会让上层实验
+            # "成功"地产出全零结果（2026-10-21 趋势过滤实验实测教训）
+            raise RuntimeError(
+                f"list_symbols 双源皆空（DB 与客户端均失败，as_of={d}）——"
+                f"数据层故障，禁止静默继续。检查 Oracle 连接与 Wind 终端。")
+        return syms
 
     def get_tradable_symbols(self, trade_date: date) -> List[str]:
         return self.list_symbols(as_of=trade_date)
