@@ -90,6 +90,12 @@ def main():
                         help='QMT 允许非收盘竞价窗口委托（默认窗口外拒单；后果自担）')
     args = parser.parse_args()
 
+    # 运行时参数校验：1/top_n 不得超过单票权重上限（评审P1-6，CLI曾绕过config校验）
+    import trading.config as _cfg
+    if getattr(args, 'top', None) and 1.0 / args.top > _cfg.MAX_WEIGHT + 1e-12:
+        raise SystemExit(f"--top {args.top} 使单票权重 {1.0/args.top:.1%} 超过"
+                         f"上限 {_cfg.MAX_WEIGHT:.0%}（至少 {int(1/_cfg.MAX_WEIGHT)} 只）")
+
     from live import Ledger, make_broker
     ledger = Ledger(args.ledger)
 

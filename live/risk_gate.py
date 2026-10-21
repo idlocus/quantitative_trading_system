@@ -157,8 +157,13 @@ class RiskGate:
             try:
                 with open(self.state_path, encoding='utf-8') as f:
                     st = json.load(f)
-            except Exception:
-                logger.warning("risk_state.json 损坏，重建")
+            except Exception as e:
+                # 状态损坏（含熔断/冷却/协议停机状态丢失）→ 禁新买入等人工核对
+                # （重置默认=冷却期/永久停机静默消失，评审P1-5；卖出照常不锁死）
+                logger.error(f"risk_state.json 损坏——禁买至人工核对: {e}")
+                st = {'no_buy_until': '2999-12-31',
+                      'schema_version': STATE_SCHEMA_VERSION,
+                      '_corrupt_state': True}
         return self._migrate_state(st)
 
     def _migrate_state(self, st: dict) -> dict:

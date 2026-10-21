@@ -78,10 +78,16 @@ def generate_target(ds: LayeredDataSource, as_of: date,
             continue
 
         # 2. 单因子覆盖率（任一必需因子缺失→该日期不可用）
+        # 遍历 required_factors 而非 mats.items()：全缺失的因子原先
+        # 根本不进循环=静默换一套因子组合（评审P1-1，2026-10-21修）
         factor_ok = True
-        for fname, fm in mats.items():
-            if fname not in required_factors or fm.empty:
-                continue
+        for fname in required_factors:
+            fm = mats.get(fname)
+            if fm is None or fm.empty:
+                logger.error(f"[signal] 必需因子'{fname}'矩阵缺失——"
+                             f"拒绝信号（防止静默切换因子组合）")
+                factor_ok = False
+                break
             if dt not in fm.index:
                 factor_ok = False
                 logger.warning(f"[signal] 因子'{fname}'在{dt.date()}无数据")
@@ -103,7 +109,9 @@ def generate_target(ds: LayeredDataSource, as_of: date,
         fail_reasons = []
         for fname in required_factors:
             fm = mats.get(fname)
-            if fm is not None and not fm.empty:
+            if fm is None or fm.empty:
+                fail_reasons.append(f"{fname}:缺失")
+            else:
                 last_cov = factor_coverage(fm, fm.index[-1])
                 fail_reasons.append(f"{fname}:{last_cov:.0%}")
         logger.error(f"[signal] 信号质量闸门：最近10日无合格日期"

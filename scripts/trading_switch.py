@@ -50,7 +50,12 @@ def get_state() -> str:
     try:
         with open(STATE_FILE, encoding='utf-8') as f:
             d = json.load(f)
-        return d.get('state', NORMAL)
+        v = d.get('state', NORMAL)
+        if v not in VALID_STATES:
+            # 未知值（如误写'HALT'）历史上会被所有比较漏过=按NORMAL放行（fail-open）
+            logger.error(f"[switch] 未知状态值 '{v}'——按 HALT_ALL 处理（fail-safe）")
+            return HALT_ALL
+        return v
     except Exception as e:
         logger.error(f"[switch] 状态文件损坏，按 HALT_ALL 处理（fail-safe）: {e}")
         return HALT_ALL

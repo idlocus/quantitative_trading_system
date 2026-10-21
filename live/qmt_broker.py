@@ -622,8 +622,12 @@ class QMTBroker(Broker):
             try:
                 with open(self.state_path, encoding='utf-8') as f:
                     return json.load(f)
-            except Exception:
-                logger.warning("[QMT] qmt_orders.json 损坏，重建")
+            except Exception as e:
+                # 在途台账损坏=不知道券商侧有什么活动订单——禁止交易而非
+                # 静默重建空状态（空状态会导致重复下单/漏记成交，评审P1-4）
+                raise RuntimeError(
+                    f"QMT在途台账损坏，禁止交易（人工核对券商活动订单后"
+                    f"重建 {self.state_path} 再恢复）: {e}")
         return {}
 
     def _save_state(self):
