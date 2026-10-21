@@ -92,9 +92,10 @@ def main():
 
     # 运行时参数校验：1/top_n 不得超过单票权重上限（评审P1-6，CLI曾绕过config校验）
     import trading.config as _cfg
-    if getattr(args, 'top', None) and 1.0 / args.top > _cfg.MAX_WEIGHT + 1e-12:
-        raise SystemExit(f"--top {args.top} 使单票权重 {1.0/args.top:.1%} 超过"
-                         f"上限 {_cfg.MAX_WEIGHT:.0%}（至少 {int(1/_cfg.MAX_WEIGHT)} 只）")
+    _min_top = int(1 / _cfg.MAX_WEIGHT)
+    if not isinstance(getattr(args, 'top', None), int) or args.top < _min_top:
+        raise SystemExit(f"--top {args.top!r} 无效——至少 {_min_top} 只"
+                         f"（1/top ≤ 单票上限 {_cfg.MAX_WEIGHT:.0%}；负数/零同样被拒）")
 
     from live import Ledger, make_broker
     ledger = Ledger(args.ledger)

@@ -192,10 +192,14 @@ class RiskGate:
     def _save_state(self):
         try:
             os.makedirs(os.path.dirname(os.path.abspath(self.state_path)), exist_ok=True)
-            with open(self.state_path, 'w', encoding='utf-8') as f:
+            tmp = self.state_path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(self._state, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, self.state_path)   # 原子写（评审P1 2026-10-22）
         except Exception as e:
-            logger.error(f"风控状态保存失败: {e}")
+            logger.error(f"风控状态保存失败——阻断交易: {e}")
+            raise RuntimeError(
+                f"风控状态写入失败（熔断/冷却/停机状态可能丢失），阻断交易: {e}")
 
     # ================= 主入口 =================
 
@@ -369,7 +373,13 @@ class RiskGate:
                 d.reasons.append(
                     f'[L3] 买入后现金{projected_cash:,.0f}<底线{min_cash:,.0f}'
                     f'（{cfg.min_cash_ratio:.0%}×NAV）——缩减买入')
-                # _assemble的buy_budget机制已控制总额，此处主要是预警
+                # 真收紧：把仓位上限压到"已投+允许买入"水平，使 _assemble 的
+                # buy_budget = 现金底线允许的净买入额（此前仅改action标签
+                # 而exposure仍=1.0→buy_budget=∞=纯预警，评审P1 2026-10-22修）
+                max_buy = max(0.0, ledger.cash - min_cash)
+                if nav_pre > 0:
+                    exposure = min(exposure, (nav_pre - ledger.cash + max_buy) / nav_pre)
+                    d.exposure = exposure
                 if action == 'trade':
                     action = 'scale'
                     d.action = action
