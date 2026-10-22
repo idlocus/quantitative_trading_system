@@ -253,7 +253,7 @@ class LayeredDataSource:
         if path.exists():
             try:
                 old = pd.read_parquet(path)
-                df = pd.concat([old, df]).drop_duplicates(subset='date').sort_values('date')
+                df = pd.concat([df, old]).drop_duplicates(subset='date').sort_values('date')  # 新在前=修订覆盖旧值（评审#8）
             except Exception:
                 pass
         self._complete_rows(df).to_parquet(path, index=False)
@@ -264,7 +264,7 @@ class LayeredDataSource:
             return b if b is not None else pd.DataFrame()
         if b is None or b.empty:
             return a
-        merged = pd.concat([a, b]).drop_duplicates(subset='date').sort_values('date')
+        merged = pd.concat([b, a]).drop_duplicates(subset='date').sort_values('date')  # 新在前（评审#8）
         return LayeredDataSource._complete_rows(merged).reset_index(drop=True)
 
     def _missing_after(self, results, symbols, start, end) -> Dict[str, List[tuple]]:

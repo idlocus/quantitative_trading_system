@@ -72,15 +72,22 @@ def build_strategy_score(ds, pool, start, end):
     score = score[score.columns.intersection(cache.keys())]
 
     # ---- 质量过滤（ROE + 杠杆，阈值来自 chain.QUALITY_FILTER） ----
+    # 质量因子是核心alpha组件（垃圾排除器，见docs/events研究方案.md改进③）
+    # 矩阵为空=所有股票质量未知=不应放行（静默跳过=无声切换到垃圾组合）
     pit = PITFinancialProvider(ds)
     qf = chain.QUALITY_FILTER
     if qf.get('roe_min') is not None:
         roe = pit.get_factor_matrix('roe', pool, start, end)
-        if not roe.empty:
+        if roe.empty:
+            logger.warning("[strategy] ROE矩阵为空——质量过滤失效，"
+                           "所有候选股将不经过ROE筛选（人工确认数据源）")
+        else:
             score = _filter_by_factor(score, roe, 'min', qf['roe_min'], 'ROE')
     if qf.get('leverage_max') is not None:
         lev = pit.get_factor_matrix('leverage', pool, start, end)
-        if not lev.empty:
+        if lev.empty:
+            logger.warning("[strategy] 杠杆矩阵为空——杠杆过滤失效（人工确认数据源）")
+        else:
             score = _filter_by_factor(score, lev, 'max', qf['leverage_max'], '杠杆')
 
     # ---- 趋势叠加（6个月剔1个月 × MOMENTUM_WEIGHT） ----

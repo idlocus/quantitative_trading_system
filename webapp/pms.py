@@ -248,6 +248,26 @@ def api_data():
         initial_capital = nav_history[0]['nav']
     total_pnl = nav - initial_capital
 
+    # ETF sleeve 合并视图（第六轮审查#9：组合级净值/收益汇总）
+    etf_nav, etf_positions_n, etf_pnl = 0.0, 0, 0.0
+    try:
+        etf_path = os.path.join(os.path.dirname(LEDGER_PATH), 'ledger_etf.json')
+        if os.path.exists(etf_path):
+            with open(etf_path, encoding='utf-8') as f:
+                etf_led = json.load(f)
+            etf_hist = etf_led.get('nav_history', [])
+            if etf_hist:
+                etf_nav = etf_hist[-1]['nav']
+                etf_positions_n = len(etf_led.get('positions', {}))
+                etf_flows = etf_led.get('cash_log', [])
+                etf_init = sum(e.get('amount', 0) for e in etf_flows
+                               if e.get('type') in ('deposit', 'withdraw'))
+                if etf_init == 0:
+                    etf_init = etf_hist[0]['nav']
+                etf_pnl = etf_nav - etf_init
+    except Exception:
+        pass
+
     return jsonify({
         'as_of': nav_history[-1]['date'] if nav_history else str(date.today()),
         'kpi': {
@@ -257,6 +277,12 @@ def api_data():
             'day_pnl': round(day_pnl, 0),
             'initial_capital': round(initial_capital, 0),
             'n_positions': len(positions), 'n_trades': len(trades),
+            # 组合级（股票+ETF）
+            'combined_nav': round(nav + etf_nav, 0),
+            'combined_pnl': round(total_pnl + etf_pnl, 0),
+            'etf_nav': round(etf_nav, 0),
+            'etf_pnl': round(etf_pnl, 0),
+            'etf_positions': etf_positions_n,
         },
         'positions': rows,
         'trades': list(reversed(trades)),   # 最新在前

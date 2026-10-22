@@ -74,19 +74,46 @@ def check_canary_requirements(ledger) -> tuple:
     """进入 CANARY 的前置条件检查"""
     issues = []
 
-    # 连续 Paper 天数（从 nav_history 推断）
+    # 连续 Paper 天数（从 nav_history 推断——按唯一交易日去重，非条数）
     nav_hist = ledger.nav_series()
-    if len(nav_hist) < MIN_PAPER_DAYS:
-        issues.append(f"Paper运行仅{len(nav_hist)}天 < 最低{MIN_PAPER_DAYS}天")
+    unique_days = len(set(str(h.get('date', ''))[:10] for h in nav_hist))
+    if unique_days < MIN_PAPER_DAYS:
+        issues.append(f"Paper运行仅{unique_days}个交易日 < 最低{MIN_PAPER_DAYS}天")
 
     # 无未处理异常
     if ledger.open_exceptions():
         issues.append(f"{len(ledger.open_exceptions())}项未处理异常")
 
-    # 上次对账
+    # 上次对账必须成功且近期（B12，第六轮审查#4：此前只查"上次"不查新旧）
     last_recon = ledger._d.get('meta', {}).get('last_recon', {})
     if last_recon and not last_recon.get('ok', True):
         issues.append(f"上次对账失败({last_recon.get('date')})")
+    elif last_recon:
+        recon_date = last_recon.get('date', '')
+        if recon_date:
+            from datetime import date as _d
+            try:
+                rd = _d.fromisoformat(str(recon_date)[:10])
+                lag = (_d.today() - rd).days
+                if lag > 7:
+                    issues.append(f"上次成功对账{recon_date}距今{lag}天（需≤7天内有成功对账）")
+            except ValueError:
+                issues.append(f"对账日期格式异常: {recon_date}")
+
+    # 连续运行检查（最近5个交易日无中断——第六轮审查#4）
+    if len(nav_hist) >= 6:
+        dates = sorted(set(str(h.get('date', ''))[:10] for h in nav_hist))[-6:]
+        # 最近5天每天有净值记录（简单连续性检查：相邻日期间隔≤3个自然日）
+        for i in range(1, len(dates)):
+            from datetime import date as _d
+            try:
+                d1 = _d.fromisoformat(dates[i-1])
+                d2 = _d.fromisoformat(dates[i])
+                if (d2 - d1).days > 3:
+                    issues.append(f"运行中断：{dates[i-1]} → {dates[i]}（{(d2-d1).days}天无记录）")
+                    break
+            except ValueError:
+                pass
 
     return len(issues) == 0, issues
 
