@@ -247,15 +247,24 @@ class QMTBroker(Broker):
         as_of = as_of or date.today()
 
         asset = self._xt_trader.query_stock_asset(self._account)
-        cash = float(asset.cash) if asset else 0.0
+        # B8补强：None≠零值——查询失败时拒绝对账
+        if asset is None:
+            raise RuntimeError("QMT资产查询None——数据不可用，拒绝对账")
+        cash = float(asset.cash)
 
+        raw_pos = self._xt_trader.query_stock_positions(self._account)
+        if raw_pos is None:
+            raise RuntimeError("QMT持仓查询None——数据不可用（非空仓）")
         positions = {}
-        for pos in (self._xt_trader.query_stock_positions(self._account) or []):
+        for pos in raw_pos:
             if pos.volume > 0:
                 positions[pos.stock_code] = int(pos.volume)
 
+        raw_trades = self._xt_trader.query_stock_trades(self._account)
+        if raw_trades is None:
+            raise RuntimeError("QMT成交查询None——流水不可用，不能判账实一致")
         trades = []
-        for t in (self._xt_trader.query_stock_trades(self._account) or []):
+        for t in raw_trades:
             d = datetime.fromtimestamp(t.traded_time).date() if getattr(t, 'traded_time', 0) else as_of
             trades.append({
                 'date': str(d)[:10], 'symbol': t.stock_code,

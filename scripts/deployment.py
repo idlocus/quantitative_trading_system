@@ -124,6 +124,15 @@ def check_live_requirements() -> tuple:
     detail = get_detail()
     if detail.get('state') != 'CANARY':
         issues.append(f"当前状态{detail.get('state')}，必须先进入CANARY")
+    # B8/B9 实盘阻断（第六轮终版：对账ID适配与提交窗口未完成前
+    # 不得进入LIVE——sync_pending不能覆盖提交→保存的崩溃窗口）
+    import os as _os
+    _b89_flag = _os.path.join(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))), 'runtime', 'b89_verified.flag')
+    if not _os.path.exists(_b89_flag):
+        issues.append("B8(对账ID适配)/B9(提交前落盘)未验证——"
+                      "需QMT环境验证后创建 runtime/b89_verified.flag 解锁")
+
     # CANARY 持续时间
     canary_since = None
     for h in reversed(detail.get('history', [])):
