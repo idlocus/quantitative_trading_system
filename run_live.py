@@ -242,6 +242,13 @@ def main():
             # 信号为空≠无目标股：可能是数据源故障/因子矩阵为空/池加载失败。
             # 必须走 halt 流程留痕（不静默退出——已有持仓仍需风控管理）。
             print("⛔ 信号为空（数据源故障/因子矩阵为空/池加载失败）——进入停机流程")
+            try:
+                from monitoring.alerts import alert
+                alert('SIGNAL_EMPTY_HALT', 'P0',
+                      f"run_live信号为空——已停机不交易。"
+                      f"持仓{len(ledger.positions)}只待人工确认")
+            except Exception:
+                pass
             from live.risk_gate import RiskGate, render_gate_markdown
             from live.risk_gate import RiskDecision
             halt_d = RiskDecision(action='halt', exposure=0.0)

@@ -97,6 +97,29 @@ def set_state(new_state: str, reason: str = '', operator: str = 'cli') -> dict:
 
     level = logging.CRITICAL if new_state == HALT_ALL else logging.WARNING
     logger.log(level, f"[Switch] {detail.get('state', NORMAL)} → {new_state} ({reason})")
+
+    # HALT_ALL 时统一撤QMT在途订单（第四轮审查#1：此前撤单只挂在
+    # broker.execute 内部，gate拦截后 execute 不被调用=覆盖不到此路径。
+    # 数据halt不撤——数据不可信时不动持仓是正确设计，只有总闸才撤。）
+    if new_state == HALT_ALL:
+        try:
+            from live.qmt_broker import QMTBroker
+            from dotenv import load_dotenv
+            load_dotenv()
+            if os.getenv('QMT_PATH'):
+                b = QMTBroker.__new__(QMTBroker)
+                b._connected = False
+                b._xt_trader = None
+                b._pending = {}
+                b.state_path = os.path.join(RUNTIME_DIR, 'qmt_orders.json')
+                b.enforce_window = False
+                b.switch_state = HALT_ALL
+                n = b.cancel_all_pending()
+                if n and n > 0:
+                    logger.warning(f"[Switch] HALT_ALL 已撤 {n} 笔QMT在途订单")
+        except Exception as e:
+            logger.critical(f"[Switch] HALT_ALL 撤单异常——人工核查券商App: {e}")
+
     return new_detail
 
 
