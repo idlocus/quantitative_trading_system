@@ -113,11 +113,12 @@ def main():
         print(f"    原始快照: {result['raw_snapshot']}")
 
         if args.fix and not result['ok']:
-            from live.reconcile import Reconciler, BrokerStatement
-            stmt = BrokerStatement.from_dict(stmt_data)
-            rec = Reconciler()
-            rep = rec.reconcile(ledger, stmt)
-            actions = rec.apply_adjustments(ledger, stmt, rep)
+            # B8硬拦截（10-22第六轮审查#2）：QMT对账的成交ID格式与账本
+            # 不一致（order_id vs order_id#cumvol），--fix会重复补记。
+            # 在ID匹配验证前，QMT来源的自动修正一律禁止。
+            print("⛔ QMT对账的 --fix 已禁用（成交ID映射未验证，重复补记风险）")
+            print("   差异请人工核对后手动修正，或等B8（ID规范化）修复后启用")
+            return
             print(f"    修正: {'; '.join(actions) if actions else '无需修正'}")
         broker.disconnect()
 

@@ -240,11 +240,9 @@ def api_data():
     # Total P&L = NAV - 初始入金（B1修复 2026-10-22：此前 NAV-成本基准
     # = +52k 假盈利；正确口径 = NAV - 本金 = 实际盈亏）
     flows = ledger.get('cash_log', [])
-    deposits = sum(e.get('amount', 0) for e in flows
-                   if e.get('type') == 'deposit')
-    withdrawals = sum(e.get('amount', 0) for e in flows
-                      if e.get('type') == 'withdraw')
-    initial_capital = deposits - withdrawals
+    # cash_log 中 withdraw 已存负数（ledger.withdraw: -amount），加法即净流入
+    initial_capital = sum(e.get('amount', 0) for e in flows
+                          if e.get('type') in ('deposit', 'withdraw'))
     if initial_capital == 0 and nav_history:
         # 无显式入金记录时用首日NAV近似（含首日交易成本误差~0.1%）
         initial_capital = nav_history[0]['nav']

@@ -60,13 +60,14 @@ def main():
     # 新鲜度：共同日距今 > 5 个自然日 → 数据陈旧告警
     day_lag = (as_of - date.fromisoformat(common_day)).days
     if day_lag > 5:
-        print(f"⚠️ ETF数据陈旧：共同交易日 {common_day} 距今 {day_lag} 天")
+        print(f"⚠️ ETF数据陈旧：共同交易日 {common_day} 距今 {day_lag} 天——停止调仓")
         try:
             from monitoring.alerts import alert
             alert('ETF_STALE_DATA', 'P1',
-                  f"ETF价格共同交易日 {common_day} 距今 {day_lag} 天——数据源滞后")
+                  f"ETF价格共同交易日 {common_day} 距今 {day_lag} 天——停止调仓")
         except Exception:
             pass
+        return   # 数据不可信时不交易（第六轮审查#6：此前只告警不拦）
     # 统一取共同日的价格（不是各自的最后一行）
     prices = {}
     for c, df in etf_df.items():

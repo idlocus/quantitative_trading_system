@@ -102,23 +102,24 @@ def set_state(new_state: str, reason: str = '', operator: str = 'cli') -> dict:
     # broker.execute 内部，gate拦截后 execute 不被调用=覆盖不到此路径。
     # 数据halt不撤——数据不可信时不动持仓是正确设计，只有总闸才撤。）
     if new_state == HALT_ALL:
+        # 尝试撤QMT在途订单（第六轮审查#1：__new__绕过构造时qmt_path等
+        # 属性缺失→cancel_all_pending里_ensure_connected会失败→被catch吞掉
+        # =假安全感。诚实处理：撤不了就明确告诉操作者去券商App手动撤）
         try:
             from live.qmt_broker import QMTBroker
             from dotenv import load_dotenv
             load_dotenv()
             if os.getenv('QMT_PATH'):
-                b = QMTBroker.__new__(QMTBroker)
-                b._connected = False
-                b._xt_trader = None
-                b._pending = {}
-                b.state_path = os.path.join(RUNTIME_DIR, 'qmt_orders.json')
-                b.enforce_window = False
-                b.switch_state = HALT_ALL
+                b = QMTBroker(enforce_window=False, switch_state=HALT_ALL)
                 n = b.cancel_all_pending()
                 if n and n > 0:
                     logger.warning(f"[Switch] HALT_ALL 已撤 {n} 笔QMT在途订单")
+                else:
+                    logger.info("[Switch] HALT_ALL：无在途订单或撤单0笔")
         except Exception as e:
-            logger.critical(f"[Switch] HALT_ALL 撤单异常——人工核查券商App: {e}")
+            logger.critical(
+                f"[Switch] HALT_ALL 自动撤单失败——必须人工打开券商App撤单！: {e}")
+            print("🔴 自动撤单失败——请立即打开券商App手动撤所有在途订单！")
 
     return new_detail
 
