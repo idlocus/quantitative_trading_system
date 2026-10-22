@@ -316,10 +316,13 @@ class Reconciler:
                 actions.append(f"补记券商成交 {len(booked)} 笔")
 
         # 2) 持仓数量对齐——区分成本基准处理
+        # 只依据实际成功入账的成交解释持仓差异（第七轮审查#1：
+        # 此前用"尝试补记的fills"判断依据——补记被阻止/只覆盖部分差异时
+        # 仍可能走 adjust_position 把数量上调但成本不重算=成本基准被污染）
         all_syms = set(ledger.positions) | set(stmt.positions)
         n_pos = 0
         n_cost_unknown = 0
-        booked_syms = {f.order.symbol for f in fills if f.status == 'filled'} if fills else set()
+        booked_syms = {f.order.symbol for f in booked} if booked else set()  # 实际入账
         for s in sorted(all_syms):
             lq, bq = ledger.positions.get(s, 0), stmt.positions.get(s, 0)
             if lq == bq:
@@ -327,10 +330,23 @@ class Reconciler:
             if bq > lq and s not in booked_syms:
                 rep.diffs.append(ReconDiff(
                     DIFF_COST_BASIS,
-                    f"券商多出{bq - lq:+d}股但无成交依据（疑送转/未入账交易）",
+                    f"券商多出{bq - lq:+d}股且无成功入账成交（成本未知）",
                     symbol=s, ledger_value=lq, broker_value=bq))
                 n_cost_unknown += 1
                 continue
+            if bq > lq and s in booked_syms:
+                # 有成交依据但补记可能只解释部分差异
+                booked_qty = sum(f.quantity for f in booked
+                                 if f.order.symbol == s and f.quantity > 0)
+                explained = lq + booked_qty
+                if bq > explained:
+                    rep.diffs.append(ReconDiff(
+                        DIFF_COST_BASIS,
+                        f"券商{bq}股 > 账本{lq}+成功入账{booked_qty}={explained}"
+                        f"（未解释{bq-explained:+d}股成本未知）",
+                        symbol=s, ledger_value=lq, broker_value=bq))
+                    n_cost_unknown += 1
+                    continue
             ledger.adjust_position(s, bq, f'账实核对修正@{as_of}')
             n_pos += 1
         if n_pos:

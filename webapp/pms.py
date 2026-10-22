@@ -241,9 +241,12 @@ def api_data():
     # = +52k 假盈利；正确口径 = NAV - 本金 = 实际盈亏）
     flows = ledger.get('cash_log', [])
     # cash_log 中 withdraw 已存负数（ledger.withdraw: -amount），加法即净流入
-    initial_capital = sum(e.get('amount', 0) for e in flows
-                          if e.get('type') in ('deposit', 'withdraw'))
-    if initial_capital == 0 and nav_history:
+    external_flows = [e for e in flows
+                      if e.get('type') in ('deposit', 'withdraw')]
+    initial_capital = sum(e.get('amount', 0) for e in external_flows)
+    # 只有完全没有外部资金流水时才兜底首日NAV（#7：入金100万+出金100万
+    # 净额=0≠没有流水——用首日NAV兜底会把本金错设成首日市值）
+    if not external_flows and nav_history:
         # 无显式入金记录时用首日NAV近似（含首日交易成本误差~0.1%）
         initial_capital = nav_history[0]['nav']
     total_pnl = nav - initial_capital

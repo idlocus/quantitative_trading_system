@@ -675,19 +675,27 @@ class QMTBroker(Broker):
             return False
 
     def cancel_all_pending(self) -> int:
-        """撤销所有未成交订单"""
+        """撤销所有未成交订单。查询失败→RuntimeError（非返回0=假无单）"""
         self._ensure_connected()
         count = 0
         try:
             orders = self._xt_trader.query_stock_orders(self._account)
-            if orders:
-                for o in orders:
-                    if o.order_status in (QMTOrderState.PENDING, QMTOrderState.SUBMITTED,
-                                          QMTOrderState.PARTIAL):
+        except Exception as e:
+            raise RuntimeError(
+                f"QMT订单查询失败——无法确认是否有在途订单，"
+                f"必须人工核查券商App: {e}")
+        if orders is None:
+            raise RuntimeError("QMT订单查询返回None——数据不可用，人工核查")
+        if orders:
+            for o in orders:
+                if o.order_status in (QMTOrderState.PENDING, QMTOrderState.SUBMITTED,
+                                      QMTOrderState.PARTIAL):
+                    try:
                         if self.cancel_order(o.order_id):
                             count += 1
-        except Exception as e:
-            logger.error(f"[QMT] 批量撤单失败: {e}")
+                    except Exception as e:
+                        logger.critical(f"[QMT] 撤单失败 {o.order_id}: {e}"
+                                        f"——此订单可能仍在券商侧！")
         return count
 
     # ==================== xtquant 回调（单参签名，register_callback(self) 注入） ====================
