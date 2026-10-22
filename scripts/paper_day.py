@@ -64,12 +64,35 @@ def main():
     try:
         import pandas as _pd
         kc = 'data_cache/kline'
-        samples = sorted(os.listdir(kc))[:3]
+        # 监控盲区修复（第七轮审查追加）：不再抽样前3个文件（排序靠前=
+        # 000001等大盘蓝筹，数据最不容易滞后），改为检查实际持仓的标的
+        # + 随机抽样5只——持仓冻结的才是真正影响净值的
+        from live.ledger import Ledger
+        _led = Ledger(os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), 'live', 'ledger.json'))
+        _held = list(_led.positions.keys())[:5]
+        import random as _rnd
+        _all = [f for f in os.listdir(kc) if f.endswith('.parquet')]
+        _rnd.seed(42)  # 确定性抽样
+        _sample_names = _rnd.sample(_all, min(3, len(_all))) if _all else []
+        _check_files = []
+        for sym in _held:
+            fname = sym.replace('.', '_') + '.parquet'
+            if os.path.exists(os.path.join(kc, fname)):
+                _check_files.append(fname)
+        _check_files.extend(f for f in _sample_names if f not in _check_files)
+        _check_files = _check_files[:8]   # 持仓5只+随机3只
+        if not _check_files:
+            _check_files = sorted(os.listdir(kc))[:3]  # 无持仓时退化为旧逻辑
         maxd = max(str(_pd.read_parquet(os.path.join(kc, f),
                                         columns=['date'])['date'].iloc[-1])[:10]
-                   for f in samples if f.endswith('.parquet'))
+                   for f in _check_files if f.endswith('.parquet'))
+        min_date = min(str(_pd.read_parquet(os.path.join(kc, f),
+                                            columns=['date'])['date'].iloc[-1])[:10]
+                      for f in _check_files if f.endswith('.parquet'))
         hb['data_max_date'] = maxd
-        if maxd < str(date.today()):
+        hb['data_min_date'] = min_date
+        if min_date < str(date.today()):  # 用最旧的判断（任一持仓滞后=净值失真）
             hb['stale_data'] = True
             try:
                 from monitoring.alerts import alert
@@ -81,6 +104,13 @@ def main():
             print(f"⚠️ 数据陈旧：缓存最新 {maxd} < 今日（Wind 终端未运行？）")
     except Exception as e:
         hb['data_check_error'] = str(e)
+        hb['stale_data'] = True   # 检查本身失败也标记为陈旧（不能静默）
+        try:
+            from monitoring.alerts import alert
+            alert('PAPER_DATA_CHECK_FAIL', 'P1',
+                  f"数据新鲜度检查异常: {e}——视为数据不可信")
+        except Exception:
+            pass
 
     try:
         from live.ledger import Ledger
