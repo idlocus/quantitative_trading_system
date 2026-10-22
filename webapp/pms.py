@@ -237,13 +237,27 @@ def api_data():
     nav = nav_history[-1]['nav'] if nav_history else ledger.get('cash', 0)
     invested = sum(ledger.get('cost', {}).get(s, 0) * q for s, q in positions.items())
 
+    # Total P&L = NAV - 初始入金（B1修复 2026-10-22：此前 NAV-成本基准
+    # = +52k 假盈利；正确口径 = NAV - 本金 = 实际盈亏）
+    flows = ledger.get('cash_log', [])
+    deposits = sum(e.get('amount', 0) for e in flows
+                   if e.get('type') == 'deposit')
+    withdrawals = sum(e.get('amount', 0) for e in flows
+                      if e.get('type') == 'withdraw')
+    initial_capital = deposits - withdrawals
+    if initial_capital == 0 and nav_history:
+        # 无显式入金记录时用首日NAV近似（含首日交易成本误差~0.1%）
+        initial_capital = nav_history[0]['nav']
+    total_pnl = nav - initial_capital
+
     return jsonify({
         'as_of': nav_history[-1]['date'] if nav_history else str(date.today()),
         'kpi': {
             'nav': nav, 'cash': round(ledger.get('cash', 0), 2),
             'invested': round(invested, 2),
-            'total_pnl': round(nav - invested, 0),
+            'total_pnl': round(total_pnl, 0),
             'day_pnl': round(day_pnl, 0),
+            'initial_capital': round(initial_capital, 0),
             'n_positions': len(positions), 'n_trades': len(trades),
         },
         'positions': rows,

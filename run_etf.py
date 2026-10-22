@@ -49,14 +49,34 @@ def main():
 
     # 最新交易日价格（T-1 收盘口径）；MTM/成交=不复权 close（R2：复权价
     # 水平值会使分红型 ETF 净值虚增），趋势信号内部用复权收益（etf_strategy）
+    # B10修复（10-22）：对齐到共同最新交易日（此前各ETF各自取最后一行，
+    # 若某ETF数据滞后会混用不同日期价格）；新鲜度校验
     cache = ds.preload_batch(list(chain.ETF_ASSETS) + ['000300.SH'],
                              as_of - timedelta(days=30), as_of)
     etf_df = {c: cache.get(c) for c in chain.ETF_ASSETS if cache.get(c) is not None}
+    # 共同最新交易日 = 各ETF最新日期的最小值（保证所有价格同日）
+    last_days = {c: str(df['date'].iloc[-1])[:10] for c, df in etf_df.items()}
+    common_day = min(last_days.values()) if last_days else str(as_of)
+    # 新鲜度：共同日距今 > 5 个自然日 → 数据陈旧告警
+    day_lag = (as_of - date.fromisoformat(common_day)).days
+    if day_lag > 5:
+        print(f"⚠️ ETF数据陈旧：共同交易日 {common_day} 距今 {day_lag} 天")
+        try:
+            from monitoring.alerts import alert
+            alert('ETF_STALE_DATA', 'P1',
+                  f"ETF价格共同交易日 {common_day} 距今 {day_lag} 天——数据源滞后")
+        except Exception:
+            pass
+    # 统一取共同日的价格（不是各自的最后一行）
+    prices = {}
+    for c, df in etf_df.items():
+        mask = df['date'].astype(str).str.startswith(common_day)
+        if mask.any():
+            prices[c] = float(df.loc[mask, 'close'].iloc[-1])
     trading_dates = max((df['date'] for df in etf_df.values()), key=len)
-    last_day = trading_dates.iloc[-1]
-    prices = {c: float(df['close'].iloc[-1]) for c, df in etf_df.items()}
+    last_day = common_day
 
-    ledger.mark_to_market(prices, date.fromisoformat(str(last_day)[:10]))
+    ledger.mark_to_market(prices, date.fromisoformat(common_day))
     nav = ledger.last_nav() or ledger.cash
     cur_w = ledger.current_weights(prices) if ledger.positions else {}
     print(f"ETF sleeve @ {last_day} | NAV {nav:,.0f} | 现金 {ledger.cash:,.0f} | "
@@ -92,7 +112,10 @@ def main():
         print("缓冲带内，无订单")
         return
 
-    broker = PaperBroker()
+    # ETF专用费用模型（B10修复 10-22：此前用PaperBroker默认=股票费率
+    # 含卖出印花税0.05%——ETF无印花税，费率应走chain.ETF_COST_RATE）
+    broker = PaperBroker(slippage=chain.ETF_COST_RATE,
+                         commission=0.0, transfer_fee=0.0, stamp_tax=0.0)
     fills = broker.execute(orders, prices, as_of)
     booked, dupes, blocked = ledger.apply_fills(fills)
     print(f"执行: {len(orders)} 单 → 入账 {len(booked)}（重复{len(dupes)} 阻断{len(blocked)}）")
