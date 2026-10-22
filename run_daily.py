@@ -78,6 +78,13 @@ def run_pm(ds, ledger, writer, ctx, execute=None, top_n=100, yes=False,
     # "不在目标中"从而生成全部卖出订单=数据故障被误判为清仓信号）。
     if not targets:
         print("⛔ 信号为空（数据链路故障/因子矩阵为空/池加载失败）——进入停机，不执行任何交易")
+        try:
+            from monitoring.alerts import alert
+            alert('SIGNAL_EMPTY_HALT', 'P0',
+                  f"信号为空（数据故障/因子缺失）——已停机不交易。"
+                  f"持仓{len(ledger.positions)}只待人工确认")
+        except Exception:
+            pass
         # 仍做 mark-to-market 记录当日状态（不交易）
         symbols = set(ledger.positions)
         if symbols:

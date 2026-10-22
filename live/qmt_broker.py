@@ -297,7 +297,15 @@ class QMTBroker(Broker):
         # 状态来自构造注入，热路径不读文件系统）
         _sw = self.switch_state
         if _sw == 'HALT_ALL':
-            logger.error("[QMT] 交易控制=HALT_ALL，拒单")
+            logger.error("[QMT] 交易控制=HALT_ALL，拒单+撤所有在途订单")
+            # B7（2026-10-22）：紧急停止不仅拦新单——已挂出的旧买单若不撤
+            # 仍会成交、继续扩大敞口。撤单尽力而为+留痕（撤不掉的告警）
+            try:
+                n_cancelled = self.cancel_all_pending()
+                if n_cancelled:
+                    logger.warning(f"[QMT] HALT_ALL 已撤 {n_cancelled} 笔在途订单")
+            except Exception as e:
+                logger.critical(f"[QMT] HALT_ALL 撤单异常——人工核查券商App: {e}")
             return [Fill(o, 0, 0, 0, 0, trade_date,
                          status='rejected(HALT_ALL)') for o in orders]
         if _sw == 'CLOSE_ONLY':

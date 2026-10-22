@@ -367,7 +367,11 @@ class RiskGate:
         nav_pre = ledger.cash + sum(q * prices.get(s, 0) for s, q in ledger.positions.items())
         if action in ('trade', 'scale') and nav_pre > 0:
             planned_buy = sum(o.amount for o in orders if o.side == 'BUY')
-            projected_cash = ledger.cash - planned_buy
+            # 卖出回款纳入（评审P2：换仓日先卖后买，不纳入会误拦买入
+            # 造成先卖隔日买的目标偏离）——保守折扣 0.9（滑点+费用+部分不成交）
+            planned_sell = sum(o.amount for o in orders if o.side == 'SELL')
+            sell_proceeds = planned_sell * chain_cfg.SELL_PROCEEDS_DISCOUNT
+            projected_cash = ledger.cash + sell_proceeds - planned_buy
             min_cash = cfg.min_cash_ratio * nav_pre
             if projected_cash < min_cash:
                 d.reasons.append(
@@ -376,7 +380,7 @@ class RiskGate:
                 # 真收紧：把仓位上限压到"已投+允许买入"水平，使 _assemble 的
                 # buy_budget = 现金底线允许的净买入额（此前仅改action标签
                 # 而exposure仍=1.0→buy_budget=∞=纯预警，评审P1 2026-10-22修）
-                max_buy = max(0.0, ledger.cash - min_cash)
+                max_buy = max(0.0, ledger.cash + sell_proceeds - min_cash)
                 if nav_pre > 0:
                     exposure = min(exposure, (nav_pre - ledger.cash + max_buy) / nav_pre)
                     d.exposure = exposure
