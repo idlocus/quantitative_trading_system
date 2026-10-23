@@ -319,6 +319,9 @@ class Reconciler:
         # 只依据实际成功入账的成交解释持仓差异（第七轮审查#1：
         # 此前用"尝试补记的fills"判断依据——补记被阻止/只覆盖部分差异时
         # 仍可能走 adjust_position 把数量上调但成本不重算=成本基准被污染）
+        # 第八轮审查：booked 在无待补成交时未赋值→UnboundLocalError（修）
+        if 'booked' not in dir():
+            booked = []   # 无待补成交时为空列表（不依赖 if fills 分支赋值）
         all_syms = set(ledger.positions) | set(stmt.positions)
         n_pos = 0
         n_cost_unknown = 0

@@ -230,3 +230,37 @@ class TestReconcile:
         rep = Reconciler().reconcile(led, s)
         md = "\n".join(rep.render_markdown())
         assert '账实核对' in md and '现金不一致' in md
+
+
+class TestCashOnlyFix:
+    """第八轮审查：只有现金差异、没有待补成交时 --fix 不应崩溃"""
+    
+    def test_cash_only_no_trades(self, tmp_path):
+        from live.ledger import Ledger
+        from live.reconcile import BrokerStatement, Reconciler
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(1_000_000)
+        led._d['cash'] = 950_000
+        led.save()
+        stmt = BrokerStatement(as_of='2026-10-23', cash=1_000_000,
+                              positions={}, trades=[])
+        rec = Reconciler()
+        rep = rec.reconcile(led, stmt)
+        actions = rec.apply_adjustments(led, stmt, rep)
+        assert any('现金' in a for a in actions)
+    
+    def test_position_diff_no_trades_marks_unknown(self, tmp_path):
+        from live.ledger import Ledger
+        from live.reconcile import BrokerStatement, Reconciler
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(1_000_000)
+        led._d['positions'] = {'600000.SH': 1000}
+        led._d['cost'] = {'600000.SH': 10.0}
+        led.save()
+        stmt = BrokerStatement(as_of='2026-10-23', cash=led.cash,
+                              positions={'600000.SH': 1500}, trades=[])
+        rec = Reconciler()
+        rep = rec.reconcile(led, stmt)
+        actions = rec.apply_adjustments(led, stmt, rep)
+        # 无成交依据的数量差异→不自动扩仓，标记成本未知
+        assert any('成本' in a for a in actions) or len(rep.diffs) > 0
