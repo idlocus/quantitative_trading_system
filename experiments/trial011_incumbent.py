@@ -29,6 +29,10 @@ from trading.strategy import _build_momentum_matrix
 
 INCLUDE_BSE = '--bse' in sys.argv
 USE_GATE = '--gate' in sys.argv          # A口径=生产闸门(15%熔断+立即重入+熔断器)
+SOFT = HARD = None                       # 014: --soft 0.08 --hard 0.20 覆盖闸门阈值
+for a in sys.argv:
+    if a.startswith('--soft'): SOFT = float(a.split('=')[1])
+    if a.startswith('--hard'): HARD = float(a.split('=')[1])
 START, END = date(2016, 6, 1), date(2026, 10, 15)
 SIGNAL_START = '2017-01-03'
 ERA_SPLIT = '2021-12-31'
@@ -120,7 +124,10 @@ gate_cfg = None
 if USE_GATE:
     from live.risk_gate import GateConfig
     # 定稿重入协议：清仓→立即现金锚满仓重入；365日>REENTRY_MAX_LIQUIDATIONS次→永久停机
-    gate_cfg = GateConfig(restart_after_liquidation=True)
+    kw = {'restart_after_liquidation': True}
+    if SOFT is not None: kw['drawdown_soft'] = SOFT
+    if HARD is not None: kw['drawdown_hard'] = HARD
+    gate_cfg = GateConfig(**kw)
 cfg = ReplayConfig(top_n=chain.TOP_N, st_matrix=st_matrix, band=chain.BUFFER_BAND,
                    use_risk_gate=USE_GATE, st_data_required=False, gate_config=gate_cfg)
 print('重放中（含公司行动，逐日带宽调仓=生产语义）...', flush=True)
