@@ -55,7 +55,10 @@ px = pd.DataFrame({s: d.set_index('date')['adjclose'].astype(float)
                    for s, d in cache.items()}).sort_index()
 px = px[(px.index >= START) & (px.index <= END)]
 me = px.groupby(px.index.to_period('M')).last()
-fwd = me.shift(-1) / me - 1          # 下月收益（信号月行）
+# 修正#2a（勘误#3）：选股只用当期信息；持仓期缺价（停牌/退市）按最后
+# 成交价退出（前向填充的月末价）——不再用"下月有价"筛当期样本（前视）
+me_ff = px.ffill().groupby(px.index.to_period('M')).last()
+fwd = me_ff.shift(-1) / me - 1
 
 # ST 矩阵（月末采样）
 print('ST 矩阵...', flush=True)
@@ -81,7 +84,9 @@ def decile_stats(name, factor_fn, direction, sens_params):
             if f is None:
                 continue
             r = fwd.loc[m]
-            uni = f.index[f.notna() & r.notna() & listed.loc[m].reindex(f.index).fillna(False)]
+            # 当期信息决定资格（勘误#3修正：不含任何未来价格存在性）
+            uni = f.index[f.notna() & listed.loc[m].reindex(f.index).fillna(False)
+                          & me.loc[m].reindex(f.index).notna().values]
             if st_m is not None and m in st_m.index:
                 stt = st_m.loc[m].reindex(uni).fillna(False)
                 uni = uni[~stt]
@@ -95,14 +100,16 @@ def decile_stats(name, factor_fn, direction, sens_params):
             q_hi = set(fv[fv >= fv.quantile(0.9)].index)
             q_lo = set(fv[fv <= fv.quantile(0.1)].index)
             g_hi = float(rv[list(q_hi)].mean()); g_lo = float(rv[list(q_lo)].mean())
-            # 换手（成员变化率，首月=1）
+            # 修正#2b（勘误#2）：多头腿按假设方向取组（+1买高分组/-1买低分组）
+            g_long = g_hi if direction > 0 else g_lo
             t_hi = 1 - len(q_hi & prev_hi) / len(q_hi) if prev_hi else 1.0
             t_lo = 1 - len(q_lo & prev_lo) / len(q_lo) if prev_lo else 1.0
             prev_hi, prev_lo = q_hi, q_lo
             cost = COST * (t_hi + t_lo)          # 多空两腿各计单边
             spreads_g.append((g_hi - g_lo) * direction)
             spreads_n.append((g_hi - g_lo) * direction - cost)
-            longs.append(g_hi - COST * t_hi)
+            longs.append(g_long - COST * (t_hi if direction > 0 else t_lo))
+            # 修正#2c：对照=同约束可交易等权（同一资格池，无选股，含停牌退出）
             benchs.append(float(rv.mean()))
             idx.append(m)
         sg, sn = pd.Series(spreads_g, index=idx), pd.Series(spreads_n, index=idx)
