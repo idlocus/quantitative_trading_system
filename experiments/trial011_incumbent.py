@@ -28,6 +28,7 @@ from trading import config as chain
 from trading.strategy import _build_momentum_matrix
 
 INCLUDE_BSE = '--bse' in sys.argv
+USE_GATE = '--gate' in sys.argv          # A口径=生产闸门(15%熔断+立即重入+熔断器)
 START, END = date(2016, 6, 1), date(2026, 10, 15)
 SIGNAL_START = '2017-01-03'
 ERA_SPLIT = '2021-12-31'
@@ -55,7 +56,17 @@ for fn in os.listdir('data_cache/kline'):
                 cache[sym] = df
     except Exception:
         continue
-pool = sorted(cache)
+# 基准必须入缓存：闸门 L2 检查依赖基准数据（缺失=每日HALT）；
+# 指数无基本面→分数 NaN→不会入选，仅作闸门/参照用途
+bfn = 'data_cache/kline/000300_SH.parquet'
+if USE_GATE and os.path.exists(bfn):
+    df = pd.read_parquet(bfn)
+    df['date'] = pd.to_datetime(df['date'])
+    df = df[(df['date'] >= pd.Timestamp(START)) & (df['date'] <= pd.Timestamp(END))]
+    if len(df):
+        cache['000300.SH'] = df
+
+pool = sorted(k for k in cache if k != '000300.SH')
 print(f'宇宙: {len(pool)} 只（{"含" if INCLUDE_BSE else "不含"}北交所）', flush=True)
 
 px = close_matrix(cache, basis='adjusted')
@@ -105,8 +116,13 @@ try:
 except Exception as e:
     print(f'⚠️ ST矩阵失败: {str(e)[:80]}', flush=True)
 
+gate_cfg = None
+if USE_GATE:
+    from live.risk_gate import GateConfig
+    # 定稿重入协议：清仓→立即现金锚满仓重入；365日>REENTRY_MAX_LIQUIDATIONS次→永久停机
+    gate_cfg = GateConfig(restart_after_liquidation=True)
 cfg = ReplayConfig(top_n=chain.TOP_N, st_matrix=st_matrix, band=chain.BUFFER_BAND,
-                   use_risk_gate=False, st_data_required=False)
+                   use_risk_gate=USE_GATE, st_data_required=False, gate_config=gate_cfg)
 print('重放中（含公司行动，逐日带宽调仓=生产语义）...', flush=True)
 r = DailyReplayBacktester(cache, cfg, corporate_actions=ca).run(
     score, start_date=SIGNAL_START, end_date=str(END))
@@ -126,9 +142,17 @@ e1_ann, e2_ann = ann_ret(e1), ann_ret(e2)
 yr_ret = eq.groupby(eq.index.year).last() / eq.groupby(eq.index.year).first() - 1
 worst = float(yr_ret.min())
 
+mode = ("A口径生产闸门" if USE_GATE else "C口径") + ("，含北交所" if INCLUDE_BSE else "")
 print(f'\n{"="*72}')
-print(f'011 现行价值/质量重验（C口径，{"含" if INCLUDE_BSE else "不含"}北交所）')
+print(f'011 现行价值/质量重验（{mode}）')
 print(f'  全期: {r.total_return:+.1%} | 年化 {full_ann:+.2%} | 夏普 {r.sharpe:.2f} | 回撤 {mdd(eq):.1%}')
+if USE_GATE:
+    print(f'  闸门事件: 停机 {getattr(r, "n_halt_days", "?")} 天 | 禁买 '
+          f'{getattr(r, "n_no_buy_days", "?")} 天 | 清仓 '
+          f'{getattr(r, "n_liquidations", "?")} 次')
+    apr = getattr(r, 'active_period_return', None)
+    if apr is not None:
+        print(f'  运行期收益（剔除停机期现金）: {apr:+.1%}')
 print(f'  两期: 2017-21 {e1_ann:+.2%} | 2022-26 {e2_ann:+.2%}')
 print(f'  最差单年: {worst:+.1%}（{yr_ret.idxmin()}）')
 print(f'  分年度: ' + ' '.join(f'{y}:{v:+.0%}' for y, v in yr_ret.items()))
