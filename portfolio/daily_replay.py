@@ -236,6 +236,11 @@ class DailyReplayBacktester:
             # 股数），再送转（股数×(1+比例)）；账本接口自带幂等去重）
             if self._ca_by_date and Td in self._ca_by_date:
                 for sym, (cash_ps, stk_ps) in self._ca_by_date[Td].items():
+                    # 除权参考价修正（2026-10-26 评审#4）：昨日原始收盘价按
+                    # 公司行动折算为除权参考价（(昨收-税后股息)/(1+送转比)），
+                    # 供涨跌停/异常价格检查——否则 10送10 会被误判为跌停拒单
+                    if sym in prev_prices and (cash_ps > 0 or stk_ps > 0):
+                        prev_prices[sym] = (prev_prices[sym] - cash_ps) / (1.0 + stk_ps)
                     qty = ledger.positions.get(sym, 0)
                     if qty > 0 and cash_ps > 0:
                         ledger.apply_dividend(sym, qty * cash_ps, ex_date=str(Td),

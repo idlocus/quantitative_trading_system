@@ -61,7 +61,8 @@ for m in me.index:
     t_lo = 1 - len(q_lo & prev) / len(q_lo) if prev else 1.0
     prev = q_lo
     long_r.append(g - COST * t_lo)
-    idx.append(m)
+    idx.append(m + 1)   # 修正（评审#1）：fwd.loc[m] 是 m月末→m+1月末的收益，
+                        # 标签必须是实现月 m+1，与011的月收益口径对齐
 sleeve = pd.Series(long_r, index=idx)
 print(f'006多头sleeve: {len(sleeve)} 月 | 年化 {float((1+sleeve).prod()**(12/len(sleeve))-1):+.2%}')
 sleeve.to_csv('ai-created/trial016_sleeve_monthly.csv', encoding='utf-8-sig')

@@ -30,22 +30,27 @@ def era(x, a, b):
 
 print(f'基准C曲线: {eq.index[0].date()} ~ {eq.index[-1].date()} | 年化 {ann(ret):+.2%} 夏普 {sharpe(ret):.2f} 回撤 {mdd(ret):.1%}')
 
-for win in (40, 60, 120):
+for win in (60, 40, 120):   # 修正（评审#2）：60日为注册主判据，40/120为敏感性
     rv = ret.rolling(win).std() * np.sqrt(252)
-    target = float(rv.mean())           # 自校准：全期均值波动率
-    expo = (target / rv).clip(upper=1.0)          # 敞口≤1，不下限（可归零）
+    # 修正（评审#2）：目标波动率=扩展窗均值（仅用过去数据，无未来信息）
+    target_t = rv.expanding().mean()
+    expo = (target_t / rv).clip(upper=1.0)          # 敞口≤1（无杠杆，参数声明）
     expo_m = expo.resample('ME').last().shift(1).reindex(ret.index).ffill().fillna(1.0)
     vt = ret * expo_m
     # 成本：月度敞口变化双边0.25%
     de = expo_m.resample('ME').last().diff().abs().dropna()
     cost = 0.0025 * de
     vt = vt - cost.reindex(vt.index).fillna(0)
+    # 对照（评审#2）：等平均敞口固定仓位（分离"择时价值"与"平均降敞口"）
+    fixed_expo = float(expo_m.mean())
+    ctrl = ret * fixed_expo
     e1, e2 = era(vt, '2017-01-01', ERA1_END), era(vt, '2022-01-01', '2099-01-01')
-    print(f'\n[窗{win}日] 目标波动率 {target:.1%} | 平均敞口 {expo_m.mean():.2f}')
-    print(f'  全期: 年化 {ann(vt):+.2%} 夏普 {sharpe(vt):.2f} 回撤 {mdd(vt):.1%}')
+    tag = '主' if win == 60 else '敏'
+    print(f'\n[{tag} 窗{win}日] 平均敞口 {fixed_expo:.2f} | 等敞口对照: 年化 {ann(ctrl):+.2%} 夏普 {sharpe(ctrl):.2f} 回撤 {mdd(ctrl):.1%}')
+    print(f'  vol目标: 年化 {ann(vt):+.2%} 夏普 {sharpe(vt):.2f} 回撤 {mdd(vt):.1%}')
     print(f'  两期: {ann(e1):+.2%} / {ann(e2):+.2%}')
     ok = mdd(vt) > C_MDD and sharpe(vt) >= C_SHARPE and ann(e1) > 0 and ann(e2) > 0
-    print(f'  判据(回撤<-31%收紧✓ 夏普≥0.51✓ 两期正✓): {"PASS" if ok else "FAIL"}')
+    print(f'  判据(回撤收紧✓ 夏普≥0.51✓ 两期正✓): {"PASS" if ok else "FAIL"}')
 
 from datetime import datetime
 reg_p = 'results/data/trial_registry.json'
