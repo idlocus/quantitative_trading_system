@@ -137,7 +137,16 @@ class ReplayResult:
 class DailyReplayBacktester:
     """逐日重放生产链路的回测器（组件与生产同源，见模块docstring）"""
 
-    def __init__(self, cache: Dict[str, pd.DataFrame], config: ReplayConfig = None):
+    def __init__(self, cache: Dict[str, pd.DataFrame], config: ReplayConfig = None,
+                 corporate_actions: 'pd.DataFrame' = None):
+        """corporate_actions: [sym, ex_date, cash_ps, stk_ps]（data/corporate_actions.py
+        口径）。提供时逐日在除权除息日对持仓入账（分红现金+送转股数）——
+        修复 2026-10-26 勘误#1：此前 raw 价格空间的净值不含分红送转=幻影损失。
+        默认 None 保持旧行为（不适用）。"""
+        self._ca_by_date = None
+        if corporate_actions is not None and len(corporate_actions):
+            from data.corporate_actions import by_date_index
+            self._ca_by_date = by_date_index(corporate_actions)
         self.cfg = config or ReplayConfig()
         close = {}          # 不复权（撮合/涨跌停/成交价——与真实市场一致）
         adjclose = {}       # 复权价（Wind后复权；收益计算等价前复权——跨除权连续）
@@ -222,6 +231,19 @@ class DailyReplayBacktester:
             Td = T.date() if hasattr(T, 'date') else T
             prices = {s: float(v) for s, v in self.raw_close_mx.loc[T].dropna().items()}
             prev_prices = {s: float(v) for s, v in self.raw_close_mx.shift(1).loc[T].dropna().items()}
+
+            # 公司行动（除权除息日 T：T-1 收盘持仓享有——先现金分红（按除权前
+            # 股数），再送转（股数×(1+比例)）；账本接口自带幂等去重）
+            if self._ca_by_date and Td in self._ca_by_date:
+                for sym, (cash_ps, stk_ps) in self._ca_by_date[Td].items():
+                    qty = ledger.positions.get(sym, 0)
+                    if qty > 0 and cash_ps > 0:
+                        ledger.apply_dividend(sym, qty * cash_ps, ex_date=str(Td),
+                                              note='replay-corporate-action')
+                    if qty > 0 and stk_ps > 0:
+                        ledger.apply_split(sym, 1.0 + stk_ps, ex_date=str(Td),
+                                           note='replay-corporate-action')
+
 
             # 信号 = T-1（前一交易日）；分数行 = ≤T-1 的最新因子行（公告日粒度，
             # 与 generate_target 的 valid_dates[-1] 语义一致，无前视）

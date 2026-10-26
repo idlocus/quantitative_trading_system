@@ -87,9 +87,16 @@ def zrow(mx):
 
 v_z = zrow(snv)
 mom = _build_momentum_matrix(cache, START, END)
-mom_z = zrow(mom.reindex_like(v_z).fillna(0))
+# 生产口径（2026-10-26 勘误#4修正）：动量缺失保留 NaN（缺动量→不可入选），
+# 与 trading.strategy._combine_value_momentum 一致；此前 fillna(0) 为变体
+mom_z = zrow(mom.reindex_like(v_z))
 score = zrow((1 - chain.MOMENTUM_WEIGHT) * v_z + chain.MOMENTUM_WEIGHT * mom_z)
 print(f'分数矩阵: {score.shape} | 有效行均值 {score.notna().sum(axis=1).mean():.0f}', flush=True)
+
+# 公司行动（勘误#1修正）：除权除息日对持仓入账分红现金与送转股数
+from data.corporate_actions import load_corporate_actions
+ca = load_corporate_actions(ds, pool, start='20160101', end='20261231')
+print(f'公司行动事件: {len(ca)} 条（现金分红 {int((ca.cash_ps>0).sum())} / 送转 {int((ca.stk_ps>0).sum())}）', flush=True)
 
 idx_dates = pd.DatetimeIndex(sorted({d for df in cache.values() for d in df['date']}))
 st_matrix = None
@@ -100,8 +107,9 @@ except Exception as e:
 
 cfg = ReplayConfig(top_n=chain.TOP_N, st_matrix=st_matrix, band=chain.BUFFER_BAND,
                    use_risk_gate=False, st_data_required=False)
-print('重放中...', flush=True)
-r = DailyReplayBacktester(cache, cfg).run(score, start_date=SIGNAL_START, end_date=str(END))
+print('重放中（含公司行动，逐日带宽调仓=生产语义）...', flush=True)
+r = DailyReplayBacktester(cache, cfg, corporate_actions=ca).run(
+    score, start_date=SIGNAL_START, end_date=str(END))
 eq = r.equity_curve
 
 # ── 3. 统计 ──
