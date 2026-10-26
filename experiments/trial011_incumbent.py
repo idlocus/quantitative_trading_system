@@ -199,5 +199,7 @@ tmp = reg_p + '.tmp'
 with open(tmp, 'w', encoding='utf-8') as f:
     json.dump(reg, f, ensure_ascii=False, indent=1)
 os.replace(tmp, reg_p)
-eq.to_csv(f'ai-created/trial011_equity_{"bse" if INCLUDE_BSE else "main"}.csv', encoding='utf-8-sig')
+tag = ('bse_' if INCLUDE_BSE else '') + ('gate' if USE_GATE else 'c') \
+      + (f'_s{SOFT}_h{HARD}' if USE_GATE and (SOFT or HARD) else '')
+eq.to_csv(f'ai-created/trial011_equity_{tag}.csv', encoding='utf-8-sig')
 print(f'登记册: {reg["count"]} 条')
