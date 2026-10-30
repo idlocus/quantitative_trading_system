@@ -27,12 +27,19 @@
 | `scripts/paper_watchdog.py` | 心跳缺失/失败 → webhook 告警 | 每交易日 16:00（计划任务） |
 | 手动补跑 | 当日漏跑时：`python scripts/paper_day.py` | 任意时刻（收盘价撮合语义不变） |
 
-计划任务注册（管理员 PowerShell/cmd 执行一次）：
+计划任务注册（管理员 PowerShell/cmd 执行一次；**指向启动器 bat**，部署模式
+对齐 pb-reader-be——bat 由 `deploy/build_launchers.py` 生成，经 uv run 启动，
+.venv 缺失/损坏时按 uv.lock 自愈，不再依赖固定解释器路径）：
 ```
-schtasks /Create /TN "QuantPaperDay" /TR "D:\workspace\python_home\quant-project\.venv\Scripts\python.exe D:\workspace\python_home\quant-project\scripts\paper_day.py" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 14:45 /F
-schtasks /Create /TN "QuantPaperWatchdog" /TR "D:\workspace\python_home\quant-project\.venv\Scripts\python.exe D:\workspace\python_home\quant-project\scripts\paper_watchdog.py" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 16:00 /F
+# 生成/更新启动器（项目根执行，生成 paper_day.bat / paper_watchdog.bat）
+uv run python deploy/build_launchers.py
+uv run python deploy/build_launchers.py --check   # 自检（bat 未手改/未过期）
+
+# 注册计划任务（管理员）
+schtasks /Create /TN "QuantPaperDay" /TR "D:\workspace\python_home\quant-project\paper_day.bat" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 14:45 /F
+schtasks /Create /TN "QuantPaperWatchdog" /TR "D:\workspace\python_home\quant-project\paper_watchdog.bat" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 16:00 /F
 ```
-（工作目录须为项目根：如需可在 /TR 内包 `cmd /c "cd /d D:\... && python ..."`）
+（bat 内已 `cd /d` 项目根并透传退出码；改任务时刻/脚本重跑生成器再重新注册）
 
 ## 通过判据（期末逐项核对，预注册）
 
@@ -75,8 +82,9 @@ schtasks /Create /TN "QuantPaperWatchdog" /TR "D:\workspace\python_home\quant-pr
   计划任务命令行指向的 `.venv\Scripts\python.exe` 无法启动。
 - **修复（2026-10-30）**：环境迁移 uv 管理（`pyproject.toml` 精确锁定 +
   `uv.lock` 入库，直接依赖版本与旧基线完全一致；全量 414 测试 +
-  release_gate 30 通过）；计划任务命令不变（.venv 路径未变），需重新注册
-  （管理员执行本文档上方 schtasks 两条命令）。
+  release_gate 30 通过）；计划任务改用 `deploy/build_launchers.py` 生成的
+  启动器 bat（uv run 自愈 venv，不再写死 .venv 解释器路径），按本文档上方
+  命令重新注册（管理员）。
 - **同期代码事件（影响信号口径，恢复运行前已修复）**：2026-10-30 审计发现
   生产信号动量双叠加（live/signals 遗留块 × build_strategy_score，生产有效
   权重≈0.36≠验收口径0.20）——paper 期间仅 10-15 一日运行可能受影响；

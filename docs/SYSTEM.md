@@ -354,8 +354,9 @@ uv run pytest -m release_gate   # 发布门槛
 # 升级依赖：显式改 pyproject.toml 的 == 版本 → uv sync → 全量测试通过后提交
 ```
 
-计划任务（paper_day/watchdog）命令行直接用 `.venv\Scripts\python.exe`，
-路径不变；环境重建后无需改任务。
+计划任务（paper_day/watchdog）指向**启动器 bat**（`deploy/build_launchers.py`
+生成到项目根，模式对齐 pb-reader-be）：bat 经 uv run 启动，.venv 损坏/缺失时
+按 uv.lock 自愈；`--check` 自检 bat 未手改未过期。
 
 ```bash
 # 每日选股扫描（短线选股入口）
