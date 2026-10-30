@@ -20,6 +20,8 @@ from live import qmt_broker as qb
 from live.broker import Fill, Order
 from live.ledger import Ledger
 
+pytestmark = pytest.mark.release_gate   # R4/QMT P0 阻断项属于发布门槛（2026-10-30 纳入）
+
 
 class ScriptedXt:
     """模拟 xtquant：订单表可控可见（模拟 OES 异步报送时序）"""
@@ -143,6 +145,27 @@ class TestAtomicBooking:
         assert ref in b._pending, "记录保留（否则成交丢失）"
         assert b._pending[ref]['booked'] == 0, "booked 不推进"
         assert led.positions.get('600000.SH') is None
+
+    def test_query_failure_does_not_poison_booked(self, tmp_path):
+        """traded=-1（查询失败哨兵）不得写入 booked（P0#8，2026-10-30）：
+        旧逻辑 booked=-1 → 查询恢复后 delta=traded-(-1)=traded+1 多入账。"""
+        xt = ScriptedXt()
+        b = make_broker(tmp_path, xt)
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(1_000_000)
+        order = Order('600000.SH', 'BUY', 0.01)
+        ref = b._submit_order(order, 100, 10.0)
+        # 查询持续失败：_await_order 超时撤单后仍 (-1, -1, 0)
+        fill = b._book_order_fill(order, ref, 49, -1, 0.0, 10.0, 100,
+                                  date(2026, 10, 30), ledger=led)
+        rec = b._pending[ref]
+        assert rec.get('booked', 0) == 0,             "traded=-1 不得推进 booked（会污染下次增量基数）"
+        assert len(led._d['trades']) == 0
+        # 查询恢复：真实成交 100 → 增量必须是 100（不是 101）
+        fill2 = b._book_order_fill(order, ref, 56, 100, 10.0, 10.0, 100,
+                                   date(2026, 10, 30), ledger=led)
+        assert fill2.quantity == 100
+        assert led.positions['600000.SH'] == 100
 
     def test_crash_before_booking_recoverable(self, tmp_path):
         """模拟入账前崩溃：新进程从台账恢复，未入账差额可补记"""

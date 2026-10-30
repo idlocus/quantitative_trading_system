@@ -235,7 +235,7 @@ def main():
                 print(f"QMT 不可用，将不执行实盘：\n{e}")
 
         # 时序（与回测 shift(1) 同构，无前视）：T-1收盘信号 + T日成交
-        print(f"生成生产信号 @ 执行日 {as_of}（Top{args.top}，5因子）...")
+        print(f"生成生产信号 @ 执行日 {as_of}（Top{args.top}，3因子价值+质量过滤+动量）...")
         psig = generate_production_signal(ds, as_of, top_n=args.top)
         targets, signal_date = psig.targets, psig.signal_date
         if not targets:

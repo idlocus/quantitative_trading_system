@@ -291,7 +291,18 @@ class Reconciler:
         - 券商有账本无的成交 → 按券商回报补记
         - 费用差 → 现金修正
         不自动处理：分红送转（需显式 CLI 指令）、trade_missing_broker（人工核查）
+
+        QMT 硬拦截（2026-10-30，评审第五轮 B8 预注册裁决）：账本成交键为
+        `id:{订单号}#{累计量}`，QMT 对账单键为 `id:{order_id}`——两套命名
+        空间永不匹配，已入账成交会被误判 trade_missing_ledger 而后再次
+        补记（BUY 双记无防线）。ID 规范化统一并验证匹配率之前，
+        source='qmt' 的对账单一律拒绝 --fix。
         """
+        if getattr(stmt, 'source', '') == 'qmt':
+            raise RuntimeError(
+                "[Recon] QMT 对账单禁止 --fix：成交ID命名空间未统一"
+                "（账本 id:{oid}#{qty} vs 对账单 id:{order_id}），"
+                "自动补记会双记。请人工核对，或先完成 ID 规范化验证。")
         actions = []
         fills = []  # 必须在开头初始化（此前仅在有漏记成交时赋值，无成交差异时UnboundLocalError）
         as_of = stmt.as_of

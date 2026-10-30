@@ -106,6 +106,10 @@ def turnover_matrix(close_mx: pd.DataFrame, volume_mx: pd.DataFrame,
     """
     成交额矩阵（元）：amount优先，退化 close×volume（矩阵级操作）。
 
+    口径（R2）：close_mx 必须传**不复权**价矩阵（raw）——成交额语义是真实
+    市场成交金额；传复权矩阵会把兜底值放大后复权因子（≥1），导致流动性
+    过滤放行实际不达标标的（2026-10-30 修复，backtester/daily_replay 均改传 raw）。
+
     唯一实现：backtester 和 daily_replay 的 20日均成交额计算共用。
     """
     fallback = close_mx * volume_mx

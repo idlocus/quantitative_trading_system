@@ -1,3 +1,6 @@
+# [2026-10-30 已被 uv.lock 取代] 环境锁定迁移至 uv 管理：
+#   直接依赖 == 锁定在 pyproject.toml，全量锁定在 uv.lock（uv sync 可复现）。
+# 本文件保留作历史基线对照（含已弃用的 lightgbm），不再维护。
 
 akshare==1.18.97
 beautifulsoup4==4.15.0

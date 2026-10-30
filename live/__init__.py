@@ -6,7 +6,7 @@
 - broker.py:     券商抽象（Broker ABC + PaperBroker 模拟撮合）
 - qmt_broker.py: QMT 实盘通道（唯一 QMTBroker 实现）
 - ledger.py:     持仓账本（JSON 持久化、成交去重、公司行动、资金流水）
-- signals.py:    生产信号（5因子，T-1收盘→T日执行，generate_production_signal 唯一入口）
+- signals.py:    生产信号（3因子价值+质量过滤+动量，T-1收盘→T日执行，generate_production_signal 唯一入口）
 - risk_gate.py:  执行风控闸门（L2数据停机/L3组合熔断/L4强制卖出，指令改写层）
 - reconcile.py:  账实核对（账本 vs 券商对账单）
 

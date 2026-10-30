@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-生产信号生成 —— 5因子合成（ep+bp+sp+size+leverage），PIT 到最新交易日
+生产信号生成 —— 经由 trading.strategy.build_strategy_score（唯一策略实现）：
+3因子价值合成（ep/bp/sp）+ 质量过滤（ROE/杠杆）+ 动量叠加，PIT 到最新交易日
 
 输出目标持仓与调仓订单（与账本持仓的差额），涨跌停不可买自动顺延。
 """
@@ -14,9 +15,6 @@ import numpy as np
 import pandas as pd
 
 from data.layered import LayeredDataSource
-from data.fundamentals import WindFundamentalProvider, build_fundamental_matrix
-from data.fundamental_pit import PITFinancialProvider
-from portfolio.construction import composite_from_matrices
 from trading import config as chain
 from utils.logger import get_logger
 
@@ -30,8 +28,9 @@ WARMUP_DAYS = chain.WARMUP_DAYS
 MIN_LISTING_DAYS = chain.MIN_LISTING_DAYS
 MIN_DAILY_TURNOVER = chain.MIN_DAILY_TURNOVER  # 20日均成交额下限（与回测同口径）
 # 信号质量闸门（数据停机保护：覆盖率崩塌→halt而非正常调仓）
-MIN_FACTOR_COVERAGE = 0.30       # 核心因子单日覆盖率下限
-MIN_TARGET_COUNT = 20            # 目标持仓下限（<20只视为数据异常）
+# 唯一真源在 trading/config（2026-10-30 收敛，重放同用），此处仅 re-export
+MIN_FACTOR_COVERAGE = chain.MIN_FACTOR_COVERAGE   # 核心因子单日覆盖率下限
+MIN_TARGET_COUNT = chain.MIN_TARGET_COUNT         # 目标持仓下限（<20只视为数据异常）
 
 
 def generate_target(ds: LayeredDataSource, as_of: date,
@@ -156,8 +155,8 @@ def generate_target(ds: LayeredDataSource, as_of: date,
                 meta = validate_factor_matrix(roe, get_factor_contract('roe'))
                 if not meta['passed']:
                     logger.warning(f"[signal] ROE契约异常: {meta['issues']}")
-            except Exception:
-                pass
+            except Exception as e:   # R2：校验异常留痕，不静默吞掉
+                logger.warning(f"[signal] ROE契约校验执行异常: {e}")
         if not roe.empty and sig_date in roe.index:
             roe_row = roe.loc[sig_date]
             fail_roe = roe_row[roe_row <= qf['roe_min']].index
@@ -176,8 +175,8 @@ def generate_target(ds: LayeredDataSource, as_of: date,
                     logger.warning(
                         f"[signal] 杠杆值中位数{last_vals.median():.1f}<10——"
                         f"疑似倍数而非百分比（D/E%），阈值{qf['leverage_max']}可能不适用")
-            except Exception:
-                pass
+            except Exception as e:   # R2：校验异常留痕，不静默吞掉
+                logger.warning(f"[signal] 杠杆契约校验执行异常: {e}")
         if not lev.empty and sig_date in lev.index:
             lev_row = lev.loc[sig_date]
             fail_lev = lev_row[lev_row >= qf['leverage_max']].index
@@ -185,30 +184,10 @@ def generate_target(ds: LayeredDataSource, as_of: date,
                 scores = scores[~scores.index.isin(fail_lev)]
                 logger.info(f"[signal] 质量过滤杠杆: 排除{len(fail_lev)}只")
 
-    # ---- v2 趋势叠加（6个月剔1个月复权收益 × MOMENTUM_WEIGHT） ----
-    mw = chain.MOMENTUM_WEIGHT
-    if mw > 0 and len(scores) > 20:
-        close_dfs = {}
-        for sym in scores.index:
-            df = cache.get(sym)
-            if df is not None and not df.empty:
-                idx2 = pd.DatetimeIndex(pd.to_datetime(df['date'])).as_unit('ns')
-                adj_col = 'adjclose' if 'adjclose' in df.columns else 'close'
-                close_dfs[sym] = pd.Series(
-                    pd.to_numeric(df[adj_col], errors='coerce').values, index=idx2)
-        if close_dfs:
-            close_s = pd.DataFrame(close_dfs).sort_index()
-            try:
-                px_21 = close_s.shift(21).loc[ts] if ts in close_s.index else None
-                px_126 = close_s.shift(126).loc[ts] if ts in close_s.index else None
-                if px_21 is not None and px_126 is not None:
-                    mom = (px_21 / px_126 - 1).dropna()
-                    v_z = (scores - scores.mean()) / (scores.std() + 1e-10)
-                    m_z = (mom - mom.mean()) / (mom.std() + 1e-10)
-                    common = v_z.index.intersection(m_z.index)
-                    scores = ((1 - mw) * v_z + mw * m_z).loc[common].dropna()
-            except (KeyError, IndexError):
-                pass    # 数据不足时退化为纯价值
+    # 趋势叠加不在此处重复实现——build_strategy_score 已按
+    # chain.MOMENTUM_WEIGHT 完成唯一一次动量合成（2026-10-30 审计：
+    # 此遗留块曾对已含动量的分数二次叠加，生产动量有效权重≈0.36≠重放0.20，
+    # 由 tests/test_release_gates.py::TestConsistencyGate 行为测试锁定）
 
     # ST 过滤（PIT，ASHAREST）：主板ST涨跌幅±5%、退市风险高，不入选。
     # 数据不可用时的安全策略由调用方决定：生产入口 generate_production_signal

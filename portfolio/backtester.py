@@ -150,7 +150,9 @@ class PortfolioBacktester:
         # 20日均成交额（元）：经由 semantics.turnover_matrix 统一口径
         from data.semantics import turnover_matrix
         amount_mx = pd.DataFrame(amount).reindex(self.close_mx.index).sort_index()
-        turnover_src = turnover_matrix(self.close_mx, self.volume_mx, amount_mx)
+        # close 基准=raw（R2）：amount 缺失日兜底=不复权价×量；复权矩阵会把
+        # 成交额放大后复权因子（≥1），流动性过滤可能放行实际不达标标的
+        turnover_src = turnover_matrix(self.raw_close_mx, self.volume_mx, amount_mx)
         self.avg_turnover_20d = turnover_src.rolling(20).mean()
         # 上市天数矩阵（累计有效数据天数，用于上市天数过滤）
         # 动态处理：新上市股在达到 min_listing_days 前不可选，退市股数据变NaN后自然排除

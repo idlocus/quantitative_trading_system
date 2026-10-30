@@ -35,7 +35,6 @@ def _ledger(tmp_dir, navs, cash=500_000):
 class TestVolTargetExecution:
     """波动率目标缩仓：组合波动>25%年化→仓位按比例缩减"""
 
-    @pytest.mark.xfail(reason="高波动NAV序列同时触发回撤检查，需精确构造场景", strict=False)
     def test_high_vol_scales_down(self):
         """构造高波动序列（日std≈2%→年化≈32%）→仓位应缩减至~78%"""
         import numpy as np
@@ -91,7 +90,6 @@ class TestMinCashRatioExecution:
 class TestMaxTurnoverExecution:
     """换手上限：计划换手>50%→缩减/预警"""
 
-    @pytest.mark.xfail(reason="test isolation: turnover calc depends on NAV precision", strict=False)
     def test_high_turnover_triggers_warning(self):
         """NAV 100万，买入80万+卖出20万→换手(80+20)/2/100=50%恰好达标"""
         tmp = tempfile.mkdtemp()

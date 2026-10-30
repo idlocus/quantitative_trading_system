@@ -29,7 +29,7 @@ JOURNAL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 class JournalWriter:
     """每日交易日志生成器（am 追加式写入，pm 补齐）"""
 
-    def __init__(self, ledger, top_n: int = 100):
+    def __init__(self, ledger, top_n: int = chain.TOP_N):
         self.ledger = ledger
         self.top_n = top_n
         os.makedirs(JOURNAL_DIR, exist_ok=True)
@@ -65,6 +65,30 @@ class JournalWriter:
             ds, set(targets) | set(self.ledger.positions), prev_trading)
         nav = self.ledger.last_nav() or self.ledger.cash
         cur_w = self.ledger.positions and self.ledger.current_weights(prices) or {}
+
+        if not targets:
+            # 空目标=数据链路故障（R3，2026-10-30 守卫）：绝不能 build_orders([])——
+            # 那会为全部持仓生成"移出组合"卖单，日报呈现假清仓计划（run_daily
+            # 已防、AM 预览此前漏防）。与 PM 同口径：停机保仓+闸门留痕。
+            bench_cache = ds.preload_batch(['000300.SH'],
+                                           prev_trading - timedelta(days=20), prev_trading)
+            decision = RiskGate().review([], self.ledger, prices, prev_prices, [],
+                                         bench_df=bench_cache.get('000300.SH'),
+                                         as_of=prev_trading, st_data_ok=psig.st_ok)
+            lines += ["## 三、盘前决策依据", "",
+                      "**⚠ 生产信号为空（数据链路异常）——进入数据停机，保持持仓**", "",
+                      "- 信号质量闸门触发（覆盖率崩塌/目标数不足/无因子数据），",
+                      "  当日不生成调仓指令；数据恢复后自动复牌", ""]
+            lines += ["## 四、盘前风控检查（停机状态）", ""]
+            lines += render_gate_markdown(decision, [])
+            with open(self.path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(lines))
+                if os.path.exists(self.path + '.pm'):
+                    with open(self.path + '.pm', encoding='utf-8') as pf:
+                        f.write("\n" + pf.read())
+            return {'targets': [], 'scores': scores, 'orders': [],
+                    'prev_trading': prev_trading}
+
         orders = build_orders(targets, cur_w, nav, top_n=self.top_n)
 
         # 风控闸门预览（基于昨收；收盘后 pm 以当日数据复核执行。
@@ -99,7 +123,8 @@ class JournalWriter:
         planned_exp, planned_cash = calc_exposure(len(targets), self.top_n)
         actual_cash = actual_cash_ratio(self.ledger.cash,
                                         self.ledger.positions, prices)
-        basic = [f"- 单票目标权重 {target_w:.1%}（上限 5%）：{'通过' if target_w <= 0.05 else '超限'}",
+        basic = [f"- 单票目标权重 {target_w:.1%}（上限 {chain.MAX_WEIGHT:.0%}）："
+                 f"{'通过' if target_w <= chain.MAX_WEIGHT else '超限'}",
                  f"- 持仓数 {len(targets)}/{self.top_n}（目标）",
                  f"- 计划仓位 {planned_exp:.0%} | 计划现金 {planned_cash:.0%}",
                  f"- 当前账户现金 {actual_cash:.0%}",
@@ -271,11 +296,15 @@ class JournalWriter:
 
         # ── 组合指标 ──
         try:
+            from data.semantics import get_price_column
             rets = {}
             for sym in symbols:
                 df = cache.get(sym)
                 if df is not None and len(df) > 60:
-                    rets[sym] = df['close'].pct_change().dropna().tail(60)
+                    # R2：跨日期收益必须用复权价（raw close 跨除权日会出-50%假收益，
+                    # 污染 Beta/相关性/波动率）
+                    adj = get_price_column(df, basis='adjusted')
+                    rets[sym] = df[adj].pct_change().dropna().tail(60)
             bench = cache.get('000300.SH')
             if rets and bench is not None and len(bench) > 60:
                 bench_ret = bench['close'].pct_change().dropna().tail(60)
@@ -300,10 +329,14 @@ class JournalWriter:
             if pool:
                 cache2 = ds.preload_batch(pool, prev_trading - timedelta(days=10), prev_trading)
                 up = down = 0
+                from data.semantics import get_price_column
                 for sym, df in cache2.items():
                     if sym == '000300.SH' or df is None or len(df) < 2:
                         continue
-                    chg = float(df['close'].iloc[-1] / df['close'].iloc[-2] - 1)
+                    # R2：宽度判定用复权收益（除权日的送转股按raw价会被误判为暴跌，
+                    # 宽度信号系统性偏空）
+                    adj = get_price_column(df, basis='adjusted')
+                    chg = float(df[adj].iloc[-1] / df[adj].iloc[-2] - 1)
                     if chg > 0.001: up += 1
                     elif chg < -0.001: down += 1
                 total = up + down

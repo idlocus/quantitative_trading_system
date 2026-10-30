@@ -36,6 +36,7 @@ import pandas as pd
 from live import Ledger, make_broker
 from live.journal import JournalWriter
 from live.risk_gate import RiskGate
+from trading import config as chain
 
 LEDGER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'live', 'ledger.json')
 
@@ -47,7 +48,7 @@ def run_am(ds, ledger, writer):
     return ctx
 
 
-def run_pm(ds, ledger, writer, ctx, execute=None, top_n=100, yes=False,
+def run_pm(ds, ledger, writer, ctx, execute=None, top_n=chain.TOP_N, yes=False,
            outside_window=False):
     """top_n 默认=主链 TOP_N（此前默认30与CLI默认100口径分裂）"""
     from live.signals import generate_production_signal, build_orders
@@ -250,7 +251,7 @@ def main():
                         help='QMT 实盘委托免交互确认（无人值守批处理用）')
     parser.add_argument('--outside-window', action='store_true',
                         help='QMT 允许非收盘竞价窗口委托（默认窗口外拒单；后果自担）')
-    parser.add_argument('--top', type=int, default=100)
+    parser.add_argument('--top', type=int, default=chain.TOP_N)
     parser.add_argument('--ledger', default=LEDGER_PATH)
     args = parser.parse_args()
 

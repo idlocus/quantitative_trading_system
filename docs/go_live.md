@@ -22,16 +22,20 @@
 **资金**：总资金的 10-20%（如总100万→10-20万）
 
 **前置**：
-- [x] QMT 阻断项全部修复（2026-10-15 订单生命周期重写：
-      ① 客户端引用(order_remark)↔真实订单号映射——回调精确关联+兜底扫描，
-        替代旧的 seq_ 直查（永远匹配不上→成交丢失）与按 symbol 猜测（并发串单）；
-      ② 成交→入账原子化（R4）：先入账成功、后推进/清退台账，入账被阻则
-        台账保留待复核；sync_pending 同口径；execute 支持传入 ledger
-        （run_daily/run_live 已接线，ATOMIC_LEDGER_BOOKING）；
-      ③ 台账原子写（临时文件+os.replace），写一半崩溃不再截断旧台账；
-      ④ 8 参数官方签名 ✓（此前已修）；⑤ 查询-1 不可确认即阻断 ✓（此前已修）。
-      验证：tests/test_qmt_lifecycle_v2.py 9 项 + 既有生命周期测试。
+- [x] QMT 订单生命周期重写（2026-10-15：①客户端引用↔真实订单号映射；
+      ②成交→入账原子化（R4）；③台账原子写；④8参数官方签名；⑤查询-1阻断）
+- [x] QMT 后续阻断项修复（2026-10-30 审计二项：
+      ⑥ booked=-1 污染——查询失败哨兵不再写入台账基数（此前恢复后
+        delta=traded+1 多入账 1 股+）；测试 test_query_failure_does_not_poison_booked；
+      ⑦ 对账 --fix 对 QMT 硬拦截——账本键 id:{oid}#{qty} vs 对账单键
+        id:{order_id} 命名空间分裂，自动补记=BUY双记；ID 规范化统一
+        并验证匹配率前拒绝修正（RuntimeError），人工核对不受影响；
+        测试 TestQmtFixHardBlock。
+      验证：tests/test_qmt_lifecycle_v2.py 10 项（已纳入 release_gate）+
+      既有生命周期测试。
       **首实盘日仍需人工验证引用映射与成交回报日志**——模拟无法替代真实券商回报）
+- [ ] 对账 ID 规范化统一（B8 收尾：统一账本/对账单成交键格式并验证
+      匹配率，之后解除 --fix 对 QMT 的硬拦截）
 - [ ] 完成券商程序化交易报备
 - [ ] `python scripts/preflight_check.py` 通过
 - [ ] `pytest -m release_gate` 通过

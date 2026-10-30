@@ -52,6 +52,13 @@ class ReplayConfig:
     st_data_required: bool = False
     # True=ST数据不可用（矩阵缺失）时禁买（与生产闸门同安全口径）；
     # False=研究对照模式（无ST矩阵按非ST处理，历史默认）
+    signal_gates_required: bool = False
+    # True=复刻生产信号质量闸门（R3：综合分覆盖率<MIN_FACTOR_COVERAGE 或
+    # 目标数<min(MIN_TARGET_COUNT, top_n) → 当日数据停机：保持持仓不调仓，
+    # 与 run_daily 空目标防清仓同语义）；False=历史研究语义（空目标=全卖）。
+    # 阈值唯一真源 trading/config（2026-10-30 收敛）。
+    min_factor_coverage: float = chain.MIN_FACTOR_COVERAGE
+    min_target_count: int = chain.MIN_TARGET_COUNT
     gate_config: object = None
     # RiskGate.GateConfig 覆盖（如 restart_after_liquidation）；None=生产默认
 
@@ -73,6 +80,7 @@ class ReplayResult:
     n_stop_sells: int                   # L4 止损强制卖出笔数
     n_halt_days: int                    # L2 停机天数
     n_no_buy_days: int                  # L3 禁买天数
+    n_data_halt_days: int = 0           # 信号质量闸门停机天数（R3空目标保仓）
     benchmark_return: Optional[float] = None   # 工件payload兼容（沪深300）
     equity_curve: pd.Series = None
     trades: List[dict] = field(default_factory=list)
@@ -120,7 +128,8 @@ class ReplayResult:
                                  f"评价策略用运行期数字，整体数字含现金拖累/缓冲")
         lines.append(f"- 区间交易日: {self.n_dates} | 有成交日: {self.n_trade_days} | "
                      f"止损卖 {self.n_stop_sells} 笔 | 停机 {self.n_halt_days} 天 | "
-                     f"禁买 {self.n_no_buy_days} 天")
+                     f"禁买 {self.n_no_buy_days} 天"
+                     f" | 信号停机 {self.n_data_halt_days} 天")
         lines.append("| 指标 | 值 |")
         lines.append("|------|------|")
         lines.append(f"| 总收益 | {self.total_return:+.2%} |")
@@ -176,7 +185,9 @@ class DailyReplayBacktester:
         from data.semantics import turnover_matrix
         vol_mx = pd.DataFrame(volume).reindex(self.close_mx.index).sort_index()
         amount_mx = pd.DataFrame(amount).reindex(self.close_mx.index).sort_index()
-        turnover_src = turnover_matrix(self.close_mx, vol_mx, amount_mx)
+        # close 基准=raw（R2）：amount 缺失日兜底=不复权价×量；
+        # 传复权矩阵会把成交额放大后复权因子（≥1），流动性过滤放行不达标标的
+        turnover_src = turnover_matrix(self.raw_close_mx, vol_mx, amount_mx)
         self.avg_turnover_20d = turnover_src.rolling(20).mean()
         self.data_age = self.close_mx.notna().cumsum()
         # ST 状态矩阵（PIT）——注意用 self.cfg（config=None 时默认初始化，公共接口安全）
@@ -223,7 +234,7 @@ class DailyReplayBacktester:
         if end_date:
             dates = dates[dates <= pd.Timestamp(end_date)]
         sig_dates = score_mx.index.sort_values()
-        n_halt = n_no_buy = 0
+        n_halt = n_no_buy = n_data_halt = 0
         n_liquidations = 0
         first_liq_date = None
 
@@ -258,6 +269,15 @@ class DailyReplayBacktester:
                 if spos >= 0:
                     row_date = sig_dates[spos]
                     targets = self._targets_at(score_mx, row_date, sig_t)
+
+                    if targets is None:
+                        # 信号质量闸门停机（R3）：覆盖率/目标数不达标——保持持仓、
+                        # 不生成订单（build_orders([],...)=全部卖出，数据故障绝不
+                        # 能被当成清仓信号），仅估值记净值
+                        n_data_halt += 1
+                        if ledger.positions:
+                            ledger.mark_to_market(prices, Td)
+                        continue
 
                     # 风控前净值快照：用当日价格先行 mark-to-market，确保闸门读到
                     # 当日实际净值（而非上一交易日的滞后值）——否则回撤/单日熔断
@@ -315,7 +335,8 @@ class DailyReplayBacktester:
             ledger.mark_to_market(prices, Td)
 
         return self._summarize(ledger, dates, n_halt, n_no_buy,
-                               n_liquidations, first_liq_date)
+                               n_liquidations, first_liq_date,
+                               n_data_halt=n_data_halt)
 
     # ---------------- 生产过滤（口径=generate_target） ----------------
 
@@ -333,12 +354,20 @@ class DailyReplayBacktester:
         row = self.st_matrix.loc[T]
         return set(row[row].index)
 
-    def _targets_at(self, score_mx, row_date, filt_t) -> List[str]:
+    def _targets_at(self, score_mx, row_date, filt_t) -> Optional[List[str]]:
         """分数取 row_date（≤信号日的最新因子行），过滤在信号日 filt_t 口径评估。
-        选股池自动约束在有行情的列（K线未覆盖的标的不可交易）。"""
+        选股池自动约束在有行情的列（K线未覆盖的标的不可交易）。
+
+        返回 None = 数据停机日（signal_gates_required 时综合分覆盖率/目标数
+        不达标）：调用方必须保持持仓不调仓（生产空目标=halt 语义），绝不能
+        走 build_orders([], ...)（那是全部卖出=数据故障被当清仓信号）。"""
         cfg = self.cfg
         scores = score_mx.loc[row_date].dropna()
         scores = scores[scores.index.intersection(self.close_mx.columns)]   # 防御：仅池内
+        if cfg.signal_gates_required:
+            n_pool = max(len(self.close_mx.columns), 1)
+            if len(scores) / n_pool < cfg.min_factor_coverage:
+                return None   # 综合分覆盖率崩塌 → 数据停机保仓
         tradable = self.close_mx.loc[filt_t].dropna().index
         scores = scores[scores.index.intersection(tradable)]
         # ST 过滤（PIT，与生产 generate_target 同口径）
@@ -356,12 +385,17 @@ class DailyReplayBacktester:
                 scores = scores[~scores.index.isin(illiquid)]
             except KeyError:
                 pass
-        return scores.sort_values(ascending=False).head(cfg.top_n).index.tolist()
+        targets = scores.sort_values(ascending=False).head(cfg.top_n).index.tolist()
+        if cfg.signal_gates_required and len(targets) < min(cfg.min_target_count,
+                                                            cfg.top_n):
+            return None   # 目标数低于下限 → 数据异常，停机保仓（R3）
+        return targets
 
     # ---------------- 汇总 ----------------
 
     def _summarize(self, ledger, dates, n_halt, n_no_buy,
-                   n_liquidations=0, first_liq_date=None) -> ReplayResult:
+                   n_liquidations=0, first_liq_date=None,
+                   n_data_halt=0) -> ReplayResult:
         cfg = self.cfg
         trades = ledger._d['trades']
         total_cost = sum(t['commission'] + t['taxes'] for t in trades)
@@ -466,6 +500,7 @@ class DailyReplayBacktester:
             total_cost=float(total_cost), avg_turnover=avg_turnover,
             n_stop_sells=n_stop,
             n_halt_days=n_halt, n_no_buy_days=n_no_buy,
+            n_data_halt_days=n_data_halt,
             benchmark_return=suite.get('沪深300'),
             equity_curve=equity, trades=trades, benchmark_suite=suite,
             daily_holdings=daily_holdings, daily_contrib=daily_contrib,

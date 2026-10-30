@@ -264,3 +264,40 @@ class TestCashOnlyFix:
         actions = rec.apply_adjustments(led, stmt, rep)
         # 无成交依据的数量差异→不自动扩仓，标记成本未知
         assert any('成本' in a for a in actions) or len(rep.diffs) > 0
+
+
+class TestQmtFixHardBlock:
+    """QMT 对账单 --fix 硬拦截（2026-10-30，评审第五轮 B8 预注册裁决）
+
+    账本键 id:{oid}#{累计量} vs QMT 对账单键 id:{order_id}——命名空间
+    分裂使 trade_missing_ledger 误判，--fix 补记=BUY 双记。ID 规范化
+    验证前，source='qmt' 一律拒绝修正。
+    """
+
+    def test_qmt_source_fix_blocked(self, tmp_path):
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(1_000_000)
+        s = BrokerStatement(as_of=AS_OF, cash=990000.0, positions={'A': 1000},
+                            trades=[{'date': AS_OF, 'symbol': 'A',
+                                     'side': 'BUY', 'price': 10.0,
+                                     'quantity': 1000, 'commission': 3.0,
+                                     'taxes': 0.1, 'trade_id': 'Q1'}],
+                            source='qmt')
+        rec = Reconciler()
+        rep = rec.reconcile(led, s)
+        with pytest.raises(RuntimeError, match='QMT'):
+            rec.apply_adjustments(led, s, rep)
+        assert 'A' not in led.positions, "被拦截时不得有任何账本变更"
+
+    def test_manual_source_fix_still_works(self, tmp_path):
+        """manual 来源（人工核对过的对账单）不受拦截影响"""
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(1_000_000)
+        s = stmt(cash=990000.0, positions={'A': 1000},
+                 trades=[{'date': AS_OF, 'symbol': 'A', 'side': 'BUY',
+                          'price': 10.0, 'quantity': 1000,
+                          'commission': 3.0, 'taxes': 0.1, 'trade_id': 'Q1'}])
+        rec = Reconciler()
+        rep = rec.reconcile(led, s)
+        actions = rec.apply_adjustments(led, s, rep)
+        assert any('补记' in a for a in actions), "manual --fix 应正常补记"

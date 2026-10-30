@@ -170,3 +170,34 @@ class TestReplayVsApprox:
         res = DailyReplayBacktester(cache, cfg).run(mx)
         md = res.summary_markdown()
         assert '每日重放' in md and 'Top2' in md
+
+
+class TestSignalGatesRequired:
+    """R3 信号质量闸门在重放中的复刻（2026-10-30）：
+    覆盖率崩塌/目标数不足 → 停机保仓（与生产空目标 halt 同语义），
+    而非历史研究语义的"空目标=全部卖出"。"""
+
+    def _setup(self, gates: bool):
+        cache = make_cache({'A.SH': [10.0] * 70, 'C.SH': [10.0] * 70})
+        # 信号日68（索引起生效）综合分全NaN=覆盖率崩塌；执行日69
+        mx = score_matrix({'A.SH': 2.0, 'C.SH': 1.0}, overrides={68: {}})
+        cfg = ReplayConfig(top_n=2, min_listing_days=0, min_daily_turnover=0,
+                           use_risk_gate=False, initial_capital=100_000,
+                           signal_gates_required=gates)
+        return DailyReplayBacktester(cache, cfg).run(mx)
+
+    def test_collapse_day_keeps_positions(self):
+        """gates=True：覆盖率崩塌日停机保仓，不产生清仓卖单"""
+        res = self._setup(gates=True)
+        assert res.n_data_halt_days >= 1, "崩塌日应计为信号停机"
+        sells_on_collapse = [t for t in res.trades
+                             if t['side'] == 'SELL' and t['date'] == LAST]
+        assert not sells_on_collapse, \
+            "数据停机日绝不能把持仓全卖（空目标≠清仓信号，R3）"
+
+    def test_legacy_mode_still_liquidates(self):
+        """gates=False：保持历史研究语义（空目标=全卖）——复现旧行为的逃生口"""
+        res = self._setup(gates=False)
+        assert res.n_data_halt_days == 0
+        sells = [t for t in res.trades if t['side'] == 'SELL' and t['date'] == LAST]
+        assert sells, "历史语义下空目标=全部卖出（行为锁定，改动需显式公告）"

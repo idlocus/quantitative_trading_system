@@ -8,7 +8,7 @@
 ## 1. 项目概述
 
 构建一个简洁、专注的量化交易系统：
-- **主链**（生产/回测/实盘）：5因子Top100等权组合，T-1信号+T日执行
+- **主链**（生产/回测/实盘）：3因子价值（ep/bp/sp）+质量过滤+动量叠加，Top100等权组合，T-1信号+T日执行（唯一实现 trading/strategy.build_strategy_score）
 - **执行风控**：L2数据停机/L3组合熔断/L4个股止损（指令改写层）
 - **账实核对**：每日对账、差异报告、超额卖出防线
 - **每日重放回测**：逐日复刻生产语义（组件同源，非近似）
@@ -55,7 +55,7 @@ quant-project/
 ├── market_env/ sector/     # 市场环境评分/板块
 ├── webapp/                 # 研究仪表盘
 ├── experiments/            # 可复现实验脚本
-├── tests/                  # 295项单元测试
+├── tests/                  # 414项单元测试（release_gate 30项为发布门槛）
 ├── docs/                   # 文档（README.md为索引）
 ├── runtime/                # 运行时状态（gitignored：risk_state/qmt_orders）
 ├── results/                # 报告与结构化工件
@@ -341,6 +341,21 @@ run_backtest.py
 ---
 
 ## 10. 运行方式
+
+### 10.0 环境管理（uv，2026-10-30 起）
+
+```bash
+# 重建/同步环境（.venv 由 uv 管理，直接依赖 == 精确锁定于 pyproject.toml，
+# 传递依赖锁定于 uv.lock——两者均入库，uv sync 完全可复现）
+uv sync
+uv run pytest -q                # 全量测试
+uv run pytest -m release_gate   # 发布门槛
+
+# 升级依赖：显式改 pyproject.toml 的 == 版本 → uv sync → 全量测试通过后提交
+```
+
+计划任务（paper_day/watchdog）命令行直接用 `.venv\Scripts\python.exe`，
+路径不变；环境重建后无需改任务。
 
 ```bash
 # 每日选股扫描（短线选股入口）

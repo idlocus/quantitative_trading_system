@@ -9,8 +9,10 @@
 用法:
     python run_daily_replay.py --universe 500 --years 3
     python run_daily_replay.py --no-gate                 # 关闸门对照
+    python run_daily_replay.py --no-signal-gates         # 关信号质量闸门（历史研究语义：空目标=全卖）
     python run_daily_replay.py --compare                 # 同数据再跑5日近似回测，输出A/B对比
-因子固定为生产5因子（ep/bp/sp/size/leverage，trading/config.PRODUCTION_FACTORS）。
+因子经由 trading.strategy.build_strategy_score（唯一实现，与生产同一函数）：
+3因子价值（ep/bp/sp）+ 质量过滤 + 动量叠加（trading/config 为唯一参数源）。
 """
 
 import argparse
@@ -48,6 +50,9 @@ def main():
     parser.add_argument('--top', type=int, default=chain.TOP_N)
     parser.add_argument('--capital', type=float, default=1_000_000.0)
     parser.add_argument('--no-gate', action='store_true', help='关闭风控闸门（对照）')
+    parser.add_argument('--no-signal-gates', action='store_true',
+                        help='关闭信号质量闸门（历史研究语义：覆盖率崩塌/空目标=全卖；'
+                             '默认开启=与生产R3同口径：停机保仓）')
     parser.add_argument('--restart', action='store_true',
                         help='硬限清仓后自动重启（默认停机等待人工决策；研究对照用）')
     parser.add_argument('--compare', action='store_true', help='同数据再跑5日近似回测做A/B对比')
@@ -84,6 +89,7 @@ def main():
     cfg = ReplayConfig(top_n=args.top, initial_capital=args.capital,
                        use_risk_gate=not args.no_gate, st_matrix=st_matrix,
                        st_data_required=st_required,
+                       signal_gates_required=not args.no_signal_gates,
                        gate_config=GateConfig(restart_after_liquidation=args.restart)
                        if not args.no_gate else None)
     print("逐日重放生产链路（build_orders → RiskGate → PaperBroker → Ledger）...")

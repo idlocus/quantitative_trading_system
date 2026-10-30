@@ -524,6 +524,12 @@ class QMTBroker(Broker):
         rec = self._pending.get(oid) or {'symbol': order.symbol,
                                          'side': order.side, 'qty': int(qty),
                                          'booked': 0}
+        # 查询失败哨兵（traded=-1）不得污染台账（2026-10-30，P0#8）：
+        # 旧逻辑 booked=-1 → 恢复后 delta=traded-(-1)=traded+1 多入账。
+        # 查询失败=成交不可确认 → 台账原地保留，交 sync_pending 复核。
+        if int(traded) < 0:
+            return Fill(order, float(ref_price), 0, 0, 0, trade_date,
+                        f'query_failed(status={status})')
         prev = int(rec.get('booked', 0))
         delta = int(traded) - prev
 

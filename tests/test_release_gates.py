@@ -60,6 +60,21 @@ class TestConsistencyGate:
         assert set(PRODUCTION_FACTORS.keys()) == set(chain.PRODUCTION_FACTORS.keys()), \
             "生产信号因子列表与 config 分叉——R1违规"
 
+    def test_all_production_factors_registered(self):
+        """R2：PRODUCTION_FACTORS 与质量过滤因子必须在 FACTOR_CONTRACTS 注册。
+
+        build_strategy_score 对未注册因子 fail-fast，但配置层先红更好——
+        此前未注册因子可静默进生产（校验被 except-pass 吞掉，2026-10-30 修）。"""
+        from data.contracts import FACTOR_CONTRACTS
+        from trading import config as chain
+        # QUALITY_FILTER 键带阈值后缀（roe_min/leverage_max）→ 还原因子名
+        qf_factors = {k.replace('_min', '').replace('_max', '')
+                      for k in chain.QUALITY_FILTER}
+        need = set(chain.PRODUCTION_FACTORS) | qf_factors
+        missing = need - set(FACTOR_CONTRACTS)
+        assert not missing, \
+            f"因子 {missing} 未注册契约（data/contracts.FACTOR_CONTRACTS）——R2违规"
+
     def test_signal_date_consistency(self):
         """信号日期、过滤日期、成交日期必须一致（R2/R6）"""
         cache, dates, syms = self._make_synthetic_data()
@@ -72,16 +87,97 @@ class TestConsistencyGate:
             def _db_src(self):
                 return None
 
-        import live.signals as sig
-        orig_build = sig.build_fundamental_matrix
-        sig.build_fundamental_matrix = lambda prov, f, pool, s, e: pd.DataFrame()
+        # 打在生效的命名空间（trading.strategy）——此前打在 live.signals 的
+        # 死导入上，补丁从未生效，测试靠 FakeDS 无基本面数据侥幸通过
+        import trading.strategy as strat
+        orig_build = strat.build_fundamental_matrix
+        strat.build_fundamental_matrix = lambda prov, f, pool, s, e: pd.DataFrame()
 
         try:
             targets, scores = generate_target(FakeDS(), date(2026, 9, 8), top_n=30)
             # 无因子数据时应返回空目标（质量闸门halt）
             assert len(targets) == 0, "无因子数据时应halt"
         finally:
-            sig.build_fundamental_matrix = orig_build
+            strat.build_fundamental_matrix = orig_build
+
+    def test_production_scores_equal_shared_strategy(self, monkeypatch):
+        """R1核心行为断言：同数据下生产信号分数必须等于共享策略实现
+        （build_strategy_score）的输出——不允许任何二次加工。
+
+        背景（2026-10-30审计）：live/signals 曾遗留一段动量叠加块，对
+        build_strategy_score 已含动量（w=0.2）的分数再叠加一次（有效权重
+        ≈0.36），生产≠重放/实验。源码检查拦不住这种分叉，只有行为断言能。
+        """
+        import trading.strategy as strat
+        from trading import config as chain
+
+        n_syms, days = 50, 200
+        dates = pd.bdate_range('2026-01-05', periods=days)
+        as_of = dates[-1].date()
+        syms = [f'S{i:04d}.SH' for i in range(n_syms)]
+        rng = np.random.RandomState(7)
+
+        cache = {}
+        for sym in syms:
+            px = 10.0 + rng.randn(days).cumsum() * 0.2
+            cache[sym] = pd.DataFrame({
+                'date': dates, 'open': px, 'high': px * 1.01,
+                'low': px * 0.99, 'close': px, 'volume': [500e4] * days,
+                'amount': px * 500e4, 'adjclose': px})
+        bench = [4000.0] * days
+        cache['000300.SH'] = pd.DataFrame({
+            'date': dates, 'open': bench, 'high': bench, 'low': bench,
+            'close': bench, 'volume': [1e9] * days,
+            'amount': [4e12] * days, 'adjclose': bench})
+
+        # 因子矩阵：截面有差异、全覆盖、值在契约范围内
+        # （每次调用重建 RandomState——不能共享外层 rng，否则两条路径
+        # 各自调用时状态推进，拿到不同矩阵，比较失去意义）
+        def fake_bfm(prov, f, pool, s, e):
+            base = {'ep': 0.05, 'bp': 1.2, 'sp': 1.5}[f]
+            seed = {'ep': 1, 'bp': 2, 'sp': 3}[f]
+            vals = base + np.random.RandomState(seed).randn(n_syms) * base * 0.3
+            return pd.DataFrame(
+                np.tile(vals, (days, 1)), index=dates, columns=syms)
+
+        class FakePIT:
+            def __init__(self, ds):
+                pass
+            def get_factor_matrix(self, name, pool, s, e):
+                val = 0.20 if name == 'roe' else 30.0   # 全部通过质量过滤
+                return pd.DataFrame(val, index=dates, columns=syms)
+
+        class FakeDS:
+            def list_symbols(self, as_of=None):
+                return syms
+            def preload_batch(self, syms_list, start, end):
+                return {s: cache[s] for s in syms_list if s in cache}
+            def _db_src(self):
+                return None
+
+        monkeypatch.setattr(strat, 'build_fundamental_matrix', fake_bfm)
+        monkeypatch.setattr(strat, 'WindFundamentalProvider',
+                            lambda ds: None)
+        monkeypatch.setattr(strat, 'PITFinancialProvider', FakePIT)
+        monkeypatch.setattr('data.fundamental_pit.PITFinancialProvider', FakePIT)
+
+        # 生产路径
+        targets, scores = generate_target(
+            FakeDS(), as_of, top_n=30, st_syms=set())
+        # 共享实现直连（重放/实验口径）
+        start = as_of - timedelta(days=chain.WARMUP_DAYS)
+        score_mx, _, _ = strat.build_strategy_score(
+            FakeDS(), syms, start, as_of)
+
+        assert len(targets) == 30, f"应有30个目标（实际{len(targets)}）"
+        row = score_mx.loc[dates[-1]]
+        prod = scores.reindex(row.index)
+        assert np.allclose(prod.values, row.values, atol=1e-9), \
+            "生产分数≠共享策略实现输出——存在二次加工（R1分叉缺陷，" \
+            "如动量双叠加）"
+        expected = row.sort_values(ascending=False).head(30).index.tolist()
+        assert set(targets) == set(expected), \
+            "生产目标≠共享实现TopN——R1分叉"
 
     def test_quality_filter_threshold_consistent(self):
         """质量过滤阈值必须真正驱动行为（行为断言，评审 §2.5b）。

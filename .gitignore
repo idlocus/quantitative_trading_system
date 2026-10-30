@@ -17,7 +17,7 @@ __pycache__/
 venv/
 env/
 .venv/
-uv.lock
+# uv.lock 提交入库（精确复现环境；pyproject 的 == 与 lock 双保险）
 
 # 运行产物
 logs/
@@ -32,6 +32,8 @@ data_cache/
 live/statements/
 # QMT在途订单台账（运行时状态）
 live/qmt_orders.json
+# 账本（运行态数据不进git，2026-10-27 8af4184 裁决；审计走 runtime 备份）
+live/ledger.json
 
 # 运行时状态（独立于源码部署；旧环境状态不随代码复制）
 runtime/

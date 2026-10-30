@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from trading import config as chain
+from data.contracts import FACTOR_CONTRACTS
 
 
 # 策略版本号（改 trading/config 中的策略参数时必须递增）
@@ -53,9 +54,11 @@ class StrategySpec:
 
     # ---- 因子定义 ----
     factors: Dict[str, float] = field(default_factory=lambda: dict(chain.PRODUCTION_FACTORS))
+    # 因子单位从契约注册表取真值（原实现误在 chain.__dict__ 里找
+    # FACTOR_CONTRACTS——它定义在 data/contracts，hasattr 恒 False，
+    # 单位恒为占位符'see data/contracts.py'，规格快照空转；2026-10-30 修复）
     factor_units: Dict[str, str] = field(default_factory=lambda: {
-        f: chain.__dict__.get('FACTOR_CONTRACTS', {}).get(f, {}).get('unit', 'unknown')
-        if hasattr(chain, 'FACTOR_CONTRACTS') else 'see data/contracts.py'
+        f: (FACTOR_CONTRACTS[f].unit if f in FACTOR_CONTRACTS else 'unregistered')
         for f in chain.PRODUCTION_FACTORS
     })
 

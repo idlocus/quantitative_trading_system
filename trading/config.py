@@ -35,6 +35,11 @@ MAX_WEIGHT = 0.05            # 单票权重上限
 MIN_LISTING_DAYS = 60        # 上市天数过滤（≥60个交易日数据才可入选）
 MIN_DAILY_TURNOVER = 500e4   # 20日均成交额下限（500万，流动性不足不可入选）
 
+# ---- 信号质量闸门（R3 数据停机：2026-10-30 从 live/signals.py 收敛至此，
+# 生产与重放共用，禁止两侧各自硬编码） ----
+MIN_FACTOR_COVERAGE = 0.30   # 核心因子单日覆盖率下限（任一必需因子低于→停机）
+MIN_TARGET_COUNT = 20        # 目标持仓下限（<min(20, top_n) 视为数据异常→停机保仓）
+
 # ---- 成交约束 ----
 LOT_SIZE = 100               # A股整手
 LIMIT_TOLERANCE = 0.002      # 涨跌停判定容差（比例）

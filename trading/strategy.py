@@ -57,16 +57,24 @@ def build_strategy_score(ds, pool, start, end):
     for f in chain.PRODUCTION_FACTORS:
         fm = build_fundamental_matrix(prov, f, pool, start, end)
         if not fm.empty:
-            # 契约校验（单位/值域/覆盖率）
+            # 契约校验（单位/值域/覆盖率）——R2：
+            # 未注册契约=配置错误，fail-fast（此前 except-pass 会静默放行
+            # 未注册因子进生产组合）；校验失败/异常=数据问题，warning 留痕
+            # （生产端由 signals 覆盖率闸门最终拦截）
+            from data.contracts import validate_factor_matrix, get_factor_contract
+            from data.contracts import ContractViolation
             try:
-                from data.contracts import validate_factor_matrix, get_factor_contract
-                meta = validate_factor_matrix(fm, get_factor_contract(f))
+                contract = get_factor_contract(f)
+            except ContractViolation as e:
+                raise ValueError(
+                    f"因子'{f}'未在 data/contracts.FACTOR_CONTRACTS 注册——"
+                    f"禁止进入生产（R2：新因子必须先注册 unit+range+coverage）") from e
+            try:
+                meta = validate_factor_matrix(fm, contract)
                 if not meta['passed']:
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        f"[strategy] 因子'{f}'契约校验未通过: {meta['issues']}")
-            except Exception:
-                pass
+                    logger.warning(f"[strategy] 因子'{f}'契约校验未通过: {meta['issues']}")
+            except Exception as e:
+                logger.warning(f"[strategy] 因子'{f}'契约校验执行异常: {e}")
             mats[f] = fm
     score = composite_from_matrices(mats, directions=chain.PRODUCTION_FACTORS)
     score = score[score.columns.intersection(cache.keys())]
@@ -94,6 +102,15 @@ def build_strategy_score(ds, pool, start, end):
     if chain.MOMENTUM_WEIGHT > 0:
         momentum = _build_momentum_matrix(cache, start, end)
         if not momentum.empty:
+            # R2：momentum 已注册契约（ratio, (-1,3), cov≥0.30），校验不再缺位
+            try:
+                from data.contracts import validate_factor_matrix, get_factor_contract
+                meta = validate_factor_matrix(
+                    momentum, get_factor_contract('momentum'))
+                if not meta['passed']:
+                    logger.warning(f"[strategy] 动量契约校验未通过: {meta['issues']}")
+            except Exception as e:
+                logger.warning(f"[strategy] 动量契约校验执行异常: {e}")
             score = _combine_value_momentum(score, momentum, chain.MOMENTUM_WEIGHT)
 
     return score, cache, mats
