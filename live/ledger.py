@@ -12,7 +12,11 @@
 - 账实调整：adjust_cash / adjust_position（对账修正，全部留痕）
 """
 
+import copy
 import json
+from numbers import Real
+from utils.state_file import exclusive_file, replace_json
+import math
 import os
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
@@ -36,9 +40,9 @@ class Ledger:
       meta }
     """
 
-    def __init__(self, path: str):
+    def __init__(self, path: str | None):
         self.path = path
-        if os.path.isfile(path):
+        if path is not None and os.path.isfile(path):
             with open(path, encoding='utf-8') as f:
                 self._d = json.load(f)
         else:
@@ -59,6 +63,20 @@ class Ledger:
         self._d.setdefault('cost', {})
         self._d.setdefault('trades', [])
         self._d.setdefault('nav_history', [])
+        # 版本校验基准（审计 2026-11-19 三-7）：本实例加载时的磁盘版本，
+        # save() 前据此检测其他进程/实例的并发写入
+        try:
+            self._base_rev = int(self._d.get('meta', {}).get('rev', 0))
+        except (TypeError, ValueError):
+            self._base_rev = 0
+
+        self._committed = copy.deepcopy(self._d) if path is not None else None
+        self._existed = path is not None and os.path.isfile(path)
+
+    def latest_activity(self, include_initial=True):
+        dates = [str(row['date'])[:10] for key in ('trades', 'events') for row in self._d[key]]
+        dates.extend(str(row['date'])[:10] for row in self._d['cash_log'][0 if include_initial else 1:])
+        return max(dates, default='')
 
     # ---- 基础 ----
 
@@ -70,15 +88,33 @@ class Ledger:
     def positions(self) -> Dict[str, int]:
         return self._d['positions']
 
-    def initialize(self, capital: float):
+    @staticmethod
+    def _require_finite(value, name: str, minimum=None):
+        """二轮复审#10：入金/调整/估值写入口统一数值校验——NaN 入金后
+        现金为 NaN，与正常账单核对竟返回一致（净值/许可/告警全失效）。"""
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f'{name} 非数值: {value!r}') from None
+        if not math.isfinite(v):
+            raise ValueError(f'{name} 必须为有限数（拒绝 NaN/Infinity）')
+        if minimum is not None and v < minimum:
+            raise ValueError(f'{name} 不得低于 {minimum}')
+        return v
+
+    def initialize(self, capital: float, as_of: date = None):
         """初始入金（仅一次）——同时建立净值基准（回撤计算的起点）"""
+        capital = self._require_finite(capital, '初始入金', minimum=0)
+        if capital <= 0:
+            raise ValueError('初始入金必须为正')
         if self._d['cash'] != 0 or self._d['trades'] or self._d['positions']:
             raise RuntimeError('账本已有资金或交易，不能重新入金')
+        as_of = as_of or date.today()
         self._d['cash'] = float(capital)
-        self._log_cash(str(date.today()), 'deposit', float(capital), '初始入金')
+        self._log_cash(str(as_of), 'deposit', float(capital), '初始入金')
         # 建立净值基准：peak_nav 从初始资金开始，而非从0（0会导致回撤保护静默跳过）
         self._d['nav_history'].append({
-            'date': str(date.today()), 'nav': round(float(capital), 2),
+            'date': str(as_of), 'nav': round(float(capital), 2),
             'cash': round(float(capital), 2), 'market_value': 0})
         self.save()
 
@@ -87,33 +123,94 @@ class Ledger:
     @staticmethod
     def trade_key(trade_id: str, d: str, symbol: str, side: str,
                   quantity: int, price: float) -> str:
-        """成交唯一键：券商回报ID优先；无ID时用要素指纹（同日重复执行可识别）"""
+        """成交唯一键：券商回报ID优先；无ID时用要素指纹（同日重复执行可识别）。
+
+        数量/价格非法（NaN 等）时指纹退化为 repr——合法成交的指纹不受影响，
+        非法成交本就会被无效成交防线拦截，指纹只进异常记录。"""
         if trade_id:
             return f'id:{trade_id}'
-        return '|'.join([str(d)[:10], symbol, side, str(int(quantity)), f'{float(price):.3f}'])
+        try:
+            qf = float(quantity)
+            qs = str(int(qf)) if (math.isfinite(qf) and qf.is_integer()) else repr(quantity)
+        except (TypeError, ValueError):
+            qs = repr(quantity)
+        px = f'{price:.3f}' if isinstance(price, Real) else repr(price)
+        return '|'.join(map(str, (str(d)[:10], symbol, side, qs, px)))
 
     def _fill_key(self, f: Fill) -> str:
         return self.trade_key(getattr(f, 'trade_id', '') or '',
                               str(f.trade_date)[:10], f.order.symbol, f.order.side,
                               f.quantity, f.price)
 
-    def apply_fills(self, fills: List[Fill]) -> Tuple[List[Fill], List[Fill]]:
+    @staticmethod
+    def _invalid_fill_reason(f: Fill) -> str:
+        """成交要素合法性校验（写账前），返回原因；空串 = 合法。
+
+        审计 2026-11-19 三-2：未知方向曾落入卖出分支凭空加现金
+        （1万→1.1万），NaN 价格把现金永久污染成 NaN，负费用/非整数
+        数量破坏对账指纹——一律在入账前拒绝。
+        """
+        try:
+            date.fromisoformat(str(f.trade_date)[:10])
+        except ValueError:
+            return 'Invalid trade date'
+        if not isinstance(f.quantity, Real) or not isinstance(f.order.symbol, str) or not f.order.symbol.strip():
+            return 'Invalid quantity or symbol'
+        side = getattr(f.order, 'side', None)
+        if side not in ('BUY', 'SELL'):
+            return f'方向非法 {side!r}'
+        price = f.price
+        if not (isinstance(price, (int, float)) and math.isfinite(price)
+                and price > 0):
+            return f'价格非法 {price!r}'
+        try:
+            qf = float(f.quantity)
+        except (TypeError, ValueError):
+            return f'数量非法 {f.quantity!r}'
+        if not (math.isfinite(qf) and qf > 0 and qf.is_integer()):
+            return f'数量非法 {f.quantity!r}'
+        for name, v in (('佣金', f.commission), ('税费', f.taxes)):
+            if not (isinstance(v, (int, float)) and math.isfinite(v) and v >= 0):
+                return f'{name}非法 {v!r}'
+        return ''
+
+    def apply_fills(self, fills: List[Fill]) -> Tuple[List[Fill], List[Fill], List[Fill]]:
         """
         成交入账。
 
         - quantity>0 即入账：含 partial（部分成交按实际量）、含 rejected 但有量的异常单
         - dedup_key 已存在 → 跳过（重复回报/同日重复执行不重复入账）
+        - 要素非法（方向/价格/数量/费用）→ 阻止入账记异常（现金不得被污染）
         Returns:
-            (booked, dupes, blocked) 本次入账的fills / 被去重跳过的fills / 被超额卖出防线阻止的fills
+            (booked, dupes, blocked) 本次入账的fills / 被去重跳过的fills / 被防线阻止的fills
         """
-        existing = {t.get('dedup_key') or self.trade_key(
+        existing = {(t.get('dedup_key') or self.trade_key(
             t.get('trade_id', ''), t['date'], t['symbol'], t['side'],
-            t['quantity'], t['price']) for t in self._d['trades']}
+            t['quantity'], t['price'])): t for t in self._d['trades']}
         booked, dupes, blocked = [], [], []
         for f in fills:
-            if f.quantity <= 0:
+            if f.quantity == 0:
                 continue  # 撤单/废单/零股 无现金与持仓影响
             key = self._fill_key(f)
+            reason = self._invalid_fill_reason(f)
+            prior = existing.get(key)
+            if prior is not None and not reason:
+                same = (prior['date'], prior['symbol'], prior['side'], prior['quantity'],
+                        prior['price'], prior['commission'], prior['taxes'])
+                if same != (str(f.trade_date)[:10], f.order.symbol, f.order.side, f.quantity,
+                            f.price, f.commission, f.taxes):
+                    reason = 'Conflicting execution identity'
+            if reason:
+                self._d['exceptions'].append({
+                    'date': str(f.trade_date)[:10], 'type': 'invalid_fill',
+                    'symbol': f.order.symbol, 'side': str(f.order.side),
+                    'quantity': repr(f.quantity), 'price': repr(f.price),
+                    'ref': key, 'note': reason, 'status': 'open',
+                })
+                logger.error(f"[Ledger] 无效成交已阻止：{f.order.symbol} "
+                             f"{reason}（记入异常队列，需人工核对）")
+                blocked.append(f)
+                continue
             if key in existing:
                 dupes.append(f)
                 continue
@@ -136,7 +233,6 @@ class Ledger:
                     blocked.append(f)
                     continue
 
-            existing.add(key)
             gross = f.price * f.quantity
             net = gross - (f.commission + f.taxes) if f.order.side == 'SELL' \
                 else gross + (f.commission + f.taxes)
@@ -165,6 +261,7 @@ class Ledger:
                 'trade_id': getattr(f, 'trade_id', '') or '',
                 'dedup_key': key,
             })
+            existing[key] = self._d['trades'][-1]
             self._log_cash(ts[:10], 'trade', -net if f.order.side == 'BUY' else net, key)
             booked.append(f)
         self.save()
@@ -178,6 +275,8 @@ class Ledger:
     def apply_dividend(self, symbol: str, amount: float, ex_date: str = '',
                        note: str = '') -> bool:
         """现金分红入账（amount=税后到账金额）。同一事件key重复执行不重复入账。"""
+        amount = self._require_finite(amount, 'dividend', minimum=0)
+        ex_date = date.fromisoformat(str(ex_date or date.today())).isoformat()
         key = f'div|{symbol}|{ex_date or str(date.today())}|{amount:.2f}'
         if self._event_seen(key):
             return False
@@ -191,8 +290,10 @@ class Ledger:
     def apply_split(self, symbol: str, ratio: float, ex_date: str = '',
                     note: str = '') -> bool:
         """送股/转增（ratio=送转比例，如10送3 → 1.3）。数量×ratio，成本÷ratio。"""
+        ratio = self._require_finite(ratio, 'split ratio')
         if ratio <= 0:
             raise ValueError('ratio 必须为正（10送3 → 1.3）')
+        ex_date = date.fromisoformat(str(ex_date or date.today())).isoformat()
         key = f'split|{symbol}|{ex_date or str(date.today())}|{ratio}'
         if self._event_seen(key):
             return False
@@ -201,6 +302,9 @@ class Ledger:
         if qty > 0:
             new_qty = int(round(qty * ratio))
             self._d['positions'][symbol] = new_qty
+            last = self._d['meta'].get('last_prices', {})
+            if symbol in last:
+                last[symbol] /= ratio
             if cost > 0:
                 self._d['cost'][symbol] = cost / ratio
         self._d['events'].append({'key': key, 'type': 'split', 'date': ex_date or str(date.today()),
@@ -213,6 +317,7 @@ class Ledger:
     # ---- 资金存取与流水 ----
 
     def deposit(self, amount: float, note: str = '') -> float:
+        amount = self._require_finite(amount, '入金额')
         if amount <= 0:
             raise ValueError('入金额必须为正')
         self._d['cash'] += float(amount)
@@ -221,6 +326,7 @@ class Ledger:
         return self._d['cash']
 
     def withdraw(self, amount: float, note: str = '') -> float:
+        amount = self._require_finite(amount, '出金额')
         if amount <= 0:
             raise ValueError('出金额必须为正')
         if amount > self._d['cash']:
@@ -235,30 +341,36 @@ class Ledger:
 
     # ---- 账实调整（对账修正，留痕） ----
 
-    def adjust_cash(self, target: float, reason: str) -> float:
+    def adjust_cash(self, target: float, reason: str, as_of=None) -> float:
         """现金修正到券商口径。差异写入cash_log（type=cash_adj）。"""
+        target = self._require_finite(target, '现金修正目标')
         diff = float(target) - self._d['cash']
         if abs(diff) < 0.005:
             return 0.0
+        day = date.fromisoformat(str(as_of or date.today())).isoformat()
         self._d['cash'] = float(target)
-        self._log_cash(str(date.today()), 'cash_adj', diff, '', reason)
+        self._log_cash(day, 'cash_adj', diff, '', reason)
         self.save()
         return diff
 
-    def adjust_position(self, symbol: str, target_qty: int, reason: str) -> int:
+    def adjust_position(self, symbol: str, target_qty: int, reason: str, as_of=None) -> int:
         """持仓数量修正到券商口径（成本不动，差异走事件留痕）。"""
+        q = self._require_finite(target_qty, 'quantity', minimum=0)
+        if not q.is_integer():
+            raise ValueError('Fractional position')
         cur = self._d['positions'].get(symbol, 0)
         diff = int(target_qty) - cur
         if diff == 0:
             return 0
-        key = f'pos_adj|{symbol}|{date.today()}|{cur}->{target_qty}'
+        day = date.fromisoformat(str(as_of or date.today())).isoformat()
+        key = f'pos_adj|{symbol}|{day}|{cur}->{target_qty}'
         if int(target_qty) <= 0:
             self._d['positions'].pop(symbol, None)
             self._d['cost'].pop(symbol, None)
         else:
             self._d['positions'][symbol] = int(target_qty)
             self._d['cost'].setdefault(symbol, 0.0)
-        self._d['events'].append({'key': key, 'type': 'pos_adj', 'date': str(date.today()),
+        self._d['events'].append({'key': key, 'type': 'pos_adj', 'date': day,
                                   'symbol': symbol, 'qty_before': cur,
                                   'qty_after': int(target_qty), 'note': reason})
         self.save()
@@ -280,23 +392,42 @@ class Ledger:
             self.save()
 
     def record_recon(self, as_of: str, ok: bool, n_diffs: int,
-                     source: str = 'manual', fixed: bool = False):
-        """统一对账记录入口"""
+                     source: str = 'manual', fixed: bool = False,
+                     snapshot: str = None):
+        """统一对账记录入口（snapshot=本次依据的原始快照路径，审计可追溯）。
+
+        二轮复审#9：snapshot=None 时**保留**上次记录的快照路径——修正流程
+        不传 snapshot 会把先前保存的依据清成空字符串。"""
+        recon = self._d.setdefault('meta', {}).get('last_recon', {})
+        if str(recon.get('date', '')) > str(as_of):
+            raise ValueError('An older reconciliation cannot replace a later record')
+        if snapshot is None:
+            snapshot = recon.get('snapshot', '') if recon.get('date') == as_of else ''
         self._d.setdefault('meta', {})['last_recon'] = {
             'date': as_of, 'ok': ok, 'n_diffs': n_diffs,
-            'source': source, 'fixed': fixed}
+            'source': source, 'fixed': fixed, 'snapshot': snapshot}
         self.save()
 
     # ---- 净值 ----
 
     def mark_to_market(self, prices: Dict[str, float], as_of: date) -> float:
         """缺价持仓沿用最后有效价（首次缺价记 warning）——不用 0 计值：
-        否则净值瞬间被低估→回撤误触→错误净值写入历史→风控被污染。"""
+        否则净值瞬间被低估→回撤误触→错误净值写入历史→风控被污染。
+
+        二轮复审#15：日期合法性在**任何状态变更之前**校验——此前拒绝的
+        补记请求已经污染了 last_prices（下一日缺价估值随之错）。且历史
+        重标只能针对最新一日（旧日重标会用当前持仓改写历史净值）。"""
+        hist = self._d['nav_history']
+        latest = max(self.latest_activity(), hist[-1]['date'] if hist else '')
+        if str(as_of) < latest:
+            raise ValueError(
+                f"拒绝重标历史日期 {as_of}（最新记录 {latest}）："
+                f"历史净值须按当日余额快照或事件重放重建，不接受当前持仓改写")
         mv = 0.0
         _last = self._d.setdefault('meta', {}).setdefault('last_prices', {})
         for s, qty in self._d['positions'].items():
             px = prices.get(s)
-            if px is not None and px > 0:
+            if px is not None and math.isfinite(px) and px > 0:
                 _last[s] = px                            # 更新最后有效价
             else:
                 px = _last.get(s, 0.0)                   # 沿用最后有效价
@@ -304,13 +435,12 @@ class Ledger:
                     logger.warning(f"[Ledger] {s} 无当前价且无历史价，按0计（首次）")
             mv += qty * px
         nav = self._d['cash'] + mv
-        hist = self._d['nav_history']
+        entry = {'date': str(as_of), 'nav': round(nav, 2),
+                 'cash': round(self._d['cash'], 2), 'market_value': round(mv, 2)}
         if not hist or hist[-1]['date'] < str(as_of):
-            hist.append({'date': str(as_of), 'nav': round(nav, 2),
-                         'cash': round(self._d['cash'], 2), 'market_value': round(mv, 2)})
+            hist.append(entry)
         else:
-            hist[-1] = {'date': str(as_of), 'nav': round(nav, 2),
-                        'cash': round(self._d['cash'], 2), 'market_value': round(mv, 2)}
+            hist[-1] = entry
         self.save()
         return nav
 
@@ -328,7 +458,7 @@ class Ledger:
         _last = self._d.get('meta', {}).get('last_prices', {})
         def _px(s):
             p = prices.get(s)
-            if p is not None and p > 0:
+            if p is not None and math.isfinite(p) and p > 0:
                 return p
             return _last.get(s, 0.0)
         mv = {s: qty * _px(s) for s, qty in self._d['positions'].items()}
@@ -345,19 +475,22 @@ class Ledger:
                                     'ref': ref, 'note': note})
 
     def save(self):
-        """原子写入：先写临时文件再 rename——进程崩溃不留半写状态的损坏账本"""
-        import tempfile
-        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            dir=os.path.dirname(os.path.abspath(self.path)),
-            suffix='.tmp', prefix='ledger_')
+        if self.path is None:
+            return
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(self._d, f, ensure_ascii=False, indent=1)
-            os.replace(tmp, self.path)     # 原子替换（Windows POSIX均支持）
+            with exclusive_file(self.path):
+                if os.path.isfile(self.path):
+                    with open(self.path, encoding='utf-8') as stream:
+                        rev = int(json.load(stream).get('meta', {}).get('rev', 0))
+                    if not self._existed or rev != self._base_rev:
+                        raise RuntimeError('账本文件已被其他实例修改，请重新加载')
+                elif self._existed:
+                    raise RuntimeError('Ledger file disappeared')
+                self._d['meta']['rev'] = self._base_rev + 1
+                replace_json(self.path, self._d)
+                self._base_rev += 1
+                self._existed = True
+                self._committed = copy.deepcopy(self._d)
         except Exception:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+            self._d = copy.deepcopy(self._committed)
             raise

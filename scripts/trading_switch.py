@@ -41,35 +41,49 @@ VALID_STATES = {NORMAL, CLOSE_ONLY, HALT_ALL}
 def get_state() -> str:
     """读取当前交易控制状态。
 
-    fail-safe（2026-10-15 定稿，评审报告 §2.1）：状态文件存在但损坏/不可读
-    → HALT_ALL。读不出状态=不知道该不该停，唯一安全的解释是"停"——
-    误停的代价（一天不交易 + 人工修复）远小于失灵放行的代价。
-    文件不存在 → NORMAL（未设置开关=正常运行，与损坏不同）。"""
+    fail-safe（2026-10-15 定稿 §2.1 + 2026-11-19 审计三-3 收口）：
+      文件不存在 → NORMAL（未设置开关=正常运行）。
+      文件存在 → 严格校验：必须是 JSON 对象且 state ∈ VALID_STATES。
+      空对象 {}、缺 state 字段、非法值、解析失败 → 一律 HALT_ALL。
+      （此前 {} 走 d.get('state', NORMAL) 静默放行——文件存在却缺状态
+      只能是损坏/半写，读不出状态=不知道该不该停，唯一安全的解释是
+      "停"：误停的代价（一天不交易 + 人工修复）远小于失灵放行的代价。）"""
     if not os.path.isfile(STATE_FILE):
         return NORMAL
     try:
         with open(STATE_FILE, encoding='utf-8') as f:
             d = json.load(f)
-        v = d.get('state', NORMAL)
+        if not isinstance(d, dict) or 'state' not in d:
+            raise ValueError(
+                f"结构非法（{'缺state字段' if isinstance(d, dict) else '非JSON对象'}）")
+        v = d['state']
         if v not in VALID_STATES:
             # 未知值（如误写'HALT'）历史上会被所有比较漏过=按NORMAL放行（fail-open）
             logger.error(f"[switch] 未知状态值 '{v}'——按 HALT_ALL 处理（fail-safe）")
             return HALT_ALL
         return v
     except Exception as e:
-        logger.error(f"[switch] 状态文件损坏，按 HALT_ALL 处理（fail-safe）: {e}")
+        logger.error(f"[switch] 状态文件损坏（含空对象/缺字段），"
+                     f"按 HALT_ALL 处理（fail-safe）: {e}")
         return HALT_ALL
 
 
 def get_state_detail() -> dict:
-    """读取完整状态详情（含操作记录）"""
+    """读取完整状态详情（含操作记录）。
+
+    损坏/结构非法时不得伪装 NORMAL（2026-11-19 审计三-3）：
+    返回 state=HALT_ALL 并带 corrupt 标记。显式 set_state 仍可修复文件。"""
     if not os.path.isfile(STATE_FILE):
         return {'state': NORMAL, 'history': []}
     try:
         with open(STATE_FILE, encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return {'state': NORMAL, 'history': []}
+            d = json.load(f)
+        if not isinstance(d, dict) or d.get('state') not in VALID_STATES:
+            raise ValueError('结构非法或 state 缺失/非法')
+        return d
+    except Exception as e:
+        logger.error(f"[switch] 状态文件损坏，详情按 HALT_ALL 口径返回: {e}")
+        return {'state': HALT_ALL, 'history': [], 'corrupt': True}
 
 
 def set_state(new_state: str, reason: str = '', operator: str = 'cli') -> dict:
@@ -112,11 +126,13 @@ def set_state(new_state: str, reason: str = '', operator: str = 'cli') -> dict:
             if os.getenv('QMT_PATH'):
                 b = QMTBroker(enforce_window=False, switch_state=HALT_ALL)
                 n = b.cancel_all_pending()
+                new_detail['unresolved_orders'] = n
                 if n and n > 0:
-                    logger.warning(f"[Switch] HALT_ALL 已撤 {n} 笔QMT在途订单")
+                    logger.critical(f"[Switch] HALT_ALL 仍有 {n} 笔委托待确认，请人工核查")
                 else:
-                    logger.info("[Switch] HALT_ALL：无在途订单或撤单0笔")
+                    logger.info("[Switch] HALT_ALL：已确认无活动订单")
         except Exception as e:
+            new_detail['cancel_verification_failed'] = True
             logger.critical(
                 f"[Switch] HALT_ALL 自动撤单失败——必须人工打开券商App撤单！: {e}")
             print("🔴 自动撤单失败——请立即打开券商App手动撤所有在途订单！")
@@ -125,18 +141,22 @@ def set_state(new_state: str, reason: str = '', operator: str = 'cli') -> dict:
 
 
 def allows_buy() -> bool:
-    """当前状态是否允许买入"""
-    return get_state() == NORMAL
+    """当前状态是否允许买入。
+
+    统一走 effective_state()（2026-11-19 审计三-3）：旧 runtime/KILL 标记
+    与状态文件同口径——此前三个许可查询只读 get_state()，KILL 存在时
+    同一时刻调用方可能得到相反答案。"""
+    return effective_state() == NORMAL
 
 
 def allows_sell() -> bool:
     """当前状态是否允许卖出（HALT_ALL 也禁止新卖单，只允许撤单）"""
-    return get_state() in (NORMAL, CLOSE_ONLY)
+    return effective_state() in (NORMAL, CLOSE_ONLY)
 
 
 def allows_any_order() -> bool:
     """当前状态是否允许任何新订单"""
-    return get_state() != HALT_ALL
+    return effective_state() != HALT_ALL
 
 
 # 兼容旧 Kill Switch（runtime/KILL 存在 = HALT_ALL）
@@ -180,10 +200,12 @@ def main():
         print(f"[!] 状态 → CLOSE_ONLY（禁止买入，允许卖出）")
     elif cmd == 'halt':
         reason = ' '.join(sys.argv[2:]) or 'manual'
-        set_state(HALT_ALL, reason=reason)
+        detail = set_state(HALT_ALL, reason=reason)
         print(f"[X] 状态 → HALT_ALL（停止一切交易）")
         print(f"    原因: {reason}")
         print(f"    解除: python {sys.argv[0]} normal")
+        if detail.get('unresolved_orders') or detail.get('cancel_verification_failed'):
+            sys.exit(2)
     else:
         print(f"未知命令: {cmd}")
         print(f"用法: python {sys.argv[0]} <normal|close|halt|status> [原因]")

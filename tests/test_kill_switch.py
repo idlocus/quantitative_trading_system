@@ -133,3 +133,57 @@ class TestSwitchFailSafe:
             assert d.action != 'halt', "回测/研究默认 NORMAL，不受实时开关污染"
         finally:
             ts.STATE_FILE = orig
+
+
+class TestSwitchBrokenStateStrict:
+    """审计 2026-11-19 三-3：文件存在但 {} / 缺 state 曾走默认 NORMAL 放行；
+    get_state_detail 损坏时同样伪装 NORMAL；许可查询曾与旧 KILL 口径分裂。"""
+
+    def test_empty_object_file_halts(self, tmp_path):
+        import scripts.trading_switch as ts
+        orig = ts.STATE_FILE
+        ts.STATE_FILE = str(tmp_path / 'switch.json')
+        try:
+            (tmp_path / 'switch.json').write_text('{}', encoding='utf-8')
+            assert ts.get_state() == 'HALT_ALL', "空对象=半写/损坏，必须停机"
+        finally:
+            ts.STATE_FILE = orig
+
+    def test_missing_state_field_halts(self, tmp_path):
+        import scripts.trading_switch as ts
+        orig = ts.STATE_FILE
+        ts.STATE_FILE = str(tmp_path / 'switch.json')
+        try:
+            (tmp_path / 'switch.json').write_text(
+                '{"history": [{"to": "NORMAL"}]}', encoding='utf-8')
+            assert ts.get_state() == 'HALT_ALL', "缺 state 字段必须停机"
+        finally:
+            ts.STATE_FILE = orig
+
+    def test_detail_corrupt_reports_halt(self, tmp_path):
+        import scripts.trading_switch as ts
+        orig = ts.STATE_FILE
+        ts.STATE_FILE = str(tmp_path / 'switch.json')
+        try:
+            (tmp_path / 'switch.json').write_text('not json', encoding='utf-8')
+            detail = ts.get_state_detail()
+            assert detail['state'] == 'HALT_ALL' and detail.get('corrupt')
+        finally:
+            ts.STATE_FILE = orig
+
+    def test_permission_queries_honor_legacy_kill(self, tmp_path):
+        """旧 runtime/KILL 存在时，许可查询与 effective_state 同答（全拒）"""
+        import scripts.trading_switch as ts
+        orig_state, orig_runtime = ts.STATE_FILE, ts.RUNTIME_DIR
+        ts.STATE_FILE = str(tmp_path / 'switch.json')
+        ts.RUNTIME_DIR = str(tmp_path)
+        try:
+            (tmp_path / 'switch.json').write_text(
+                '{"state": "NORMAL", "history": []}', encoding='utf-8')
+            (tmp_path / 'KILL').write_text('reason: test', encoding='utf-8')
+            assert ts.effective_state() == 'HALT_ALL'
+            assert ts.allows_buy() is False
+            assert ts.allows_sell() is False
+            assert ts.allows_any_order() is False
+        finally:
+            ts.STATE_FILE, ts.RUNTIME_DIR = orig_state, orig_runtime

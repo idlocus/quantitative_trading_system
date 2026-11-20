@@ -18,6 +18,7 @@
 """
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import date
@@ -39,16 +40,21 @@ DIFF_FEE = 'fee_diff'                      # 手续费不一致
 DIFF_QTY = 'qty_diff'                      # 同ID成交数量不一致
 DIFF_PRICE = 'price_diff'                  # 同ID成交价格不一致
 DIFF_COST_BASIS = 'cost_basis_unknown'     # 持仓多出但无成交依据
+DIFF_ID_CONFLICT = 'trade_id_conflict'     # 同ID成交要素冲突（日期/证券/方向不符）
 
 
 @dataclass
 class BrokerStatement:
-    """券商账户快照（对账基准，券商为准）"""
+    """券商账户快照（对账基准，券商为准）
+
+    trades 语义（审计 2026-11-19 三-2 修复）：None=未提供流水（跳过成交
+    核对，手工单可只填现金+持仓）；[]=已确认当日零笔成交（账本当日成交
+    将判 missing_broker——两种状态不得混同）。"""
     as_of: str
     cash: float
     positions: Dict[str, int]
-    trades: List[dict] = field(default_factory=list)   # 券商成交流水
-    source: str = 'manual'                              # manual / qmt / csv
+    trades: Optional[List[dict]] = None                    # None=未提供；[]=确认零笔
+    source: str = 'manual'                                 # manual / qmt / csv
     note: str = ''
 
     @classmethod
@@ -56,30 +62,74 @@ class BrokerStatement:
         for k in ('as_of', 'cash', 'positions'):
             if k not in d:
                 raise ValueError(f"对账文件缺少必填字段: {k}")
-        return cls(as_of=str(d['as_of'])[:10], cash=float(d['cash']),
-                   positions={s: int(q) for s, q in d['positions'].items()},
-                   trades=d.get('trades', []), source=d.get('source', 'manual'),
+        cash = float(d['cash'])
+        if not math.isfinite(cash):
+            raise ValueError(f"对账现金非法（非有限数，无法核对）: {d['cash']!r}")
+        positions: Dict[str, int] = {}
+        for s, q in d['positions'].items():
+            qf = float(q)
+            if not (math.isfinite(qf) and qf.is_integer()):
+                raise ValueError(f"持仓数量非法 {s}: {q!r}（须为整数股）")
+            positions[s] = int(qf)
+        return cls(as_of=str(d['as_of']), cash=cash,
+                   positions=positions,
+                   trades=d['trades'] if 'trades' in d else None,
+                   source=d.get('source', 'manual'),
                    note=d.get('note', ''))
 
     def __post_init__(self):
-        """成交记录规范化（无论从JSON还是代码构造，字段口径统一）"""
+        """要素校验 + 成交记录规范化（无论从JSON还是代码构造，口径统一）。
+
+        审计 2026-11-19 三-2：NaN 现金/价格、非法方向、非法日期曾在校验
+        中穿过——NaN 与任何比较均为 False，全部判"一致"。垃圾输入必须
+        在入口拒绝，不得带着 NaN 进入核对。"""
+        self.cash = float(self.cash)
+        if not math.isfinite(self.cash):
+            raise ValueError(f"对账现金非法（非有限数）: {self.cash!r}")
+        self.as_of = date.fromisoformat(str(self.as_of)).isoformat()
+        for symbol, qty in self.positions.items():
+            q = float(qty)
+            if not (math.isfinite(q) and q.is_integer() and q >= 0):
+                raise ValueError(f'Invalid position quantity: {symbol}')
+        self.positions = {s: int(q) for s, q in self.positions.items()}
         self.trades = self._normalize_trades(self.trades)
+        if any(t['date'] != self.as_of for t in self.trades or []):
+            raise ValueError('Execution date differs from statement date')
 
     @staticmethod
-    def _normalize_trades(trades: List[dict]) -> List[dict]:
+    def _normalize_trades(trades: Optional[List[dict]]) -> Optional[List[dict]]:
+        if trades is None:
+            return None
         out = []
         for t in trades or []:
             for k in ('date', 'symbol', 'side', 'price', 'quantity'):
                 if k not in t:
                     raise ValueError(f"券商成交缺少字段 {k}: {t}")
-            if int(t['quantity']) <= 0:
-                raise ValueError(f"券商成交数量≤0（非法对账数据）: {t}")
+            side = str(t['side']).upper()
+            if side not in ('BUY', 'SELL'):
+                raise ValueError(f"券商成交方向非法 {t['side']!r}: {t}")
+            qf = float(t['quantity'])
+            if not (math.isfinite(qf) and qf > 0 and qf.is_integer()):
+                raise ValueError(f"券商成交数量非法（须为正整数股）: {t}")
+            price = float(t['price'])
+            if not (math.isfinite(price) and price > 0):
+                raise ValueError(f"券商成交价格非法 {t['price']!r}: {t}")
+            try:
+                date.fromisoformat(str(t['date'])[:10])
+            except ValueError:
+                raise ValueError(f"券商成交日期非法 {t['date']!r}: {t}") from None
+            fees = {}
+            for fk in ('commission', 'taxes'):
+                v = float(t.get(fk, 0) or 0)
+                if not (math.isfinite(v) and v >= 0):
+                    raise ValueError(f"券商成交{fk}非法 {t.get(fk)!r}: {t}")
+                fees[fk] = v
             out.append({
                 'date': str(t['date'])[:10], 'symbol': t['symbol'],
-                'side': str(t['side']).upper(), 'price': float(t['price']),
-                'quantity': int(t['quantity']),
-                'commission': float(t.get('commission', 0) or 0),
-                'taxes': float(t.get('taxes', 0) or 0),
+                'side': side, 'price': price,
+                'quantity': int(qf),
+                'commission': fees['commission'],
+                'taxes': fees['taxes'],
                 'trade_id': str(t.get('trade_id', '') or ''),
             })
         return out
@@ -99,13 +149,16 @@ def write_statement_template(path: str = None) -> str:
     """生成对账文件模板（手工填券商数据用）"""
     path = path or statement_path_for()
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    # 注意：模板不带 trades 键（缺省=未提供流水，跳过成交核对）。
+    # 若填写 trades 则必须完整誊录当日全部成交——留空数组 [] 会被解释为
+    # "已确认当日零笔成交"（审计 2026-11-19 三-2：两种语义不得混同）。
     tpl = {
         'as_of': date.today().isoformat(),
         'source': 'manual',
-        'note': '从券商App截图/交割单手工誊录；QMT就位后可自动生成',
+        'note': '从券商App截图/交割单手工誊录；QMT就位后可自动生成。'
+                '如需核对成交流水，添加 trades 数组并完整誊录当日全部成交。',
         'cash': 0.0,
         'positions': {},
-        'trades': [],
     }
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(tpl, f, ensure_ascii=False, indent=2)
@@ -127,7 +180,8 @@ class ReconDiff:
                 DIFF_TRADE_MISSING_BROKER: '账本有成交·券商无（误记/重复入账嫌疑）',
                 DIFF_TRADE_DUP: '券商回报重复', DIFF_FEE: '手续费差异',
                 DIFF_QTY: '成交数量不一致', DIFF_PRICE: '成交价格不一致',
-                DIFF_COST_BASIS: '成本基准不可确认'}.get(self.kind, self.kind)
+                DIFF_COST_BASIS: '成本基准不可确认',
+                DIFF_ID_CONFLICT: '同ID成交要素冲突'}.get(self.kind, self.kind)
 
 
 @dataclass
@@ -182,6 +236,9 @@ class Reconciler:
 
     def reconcile(self, ledger, stmt: BrokerStatement) -> ReconReport:
         """全量核对：现金 / 持仓 / 成交流水 / 费用。返回差异报告（不修改账本）。"""
+        if not math.isfinite(ledger.cash) or any(not math.isfinite(float(q)) or float(q) < 0
+                or not float(q).is_integer() for q in ledger.positions.values()):
+            raise ValueError('Invalid ledger balances')
         rep = ReconReport(as_of=stmt.as_of, source=stmt.source)
         self._check_cash(ledger, stmt, rep)
         self._check_positions(ledger, stmt, rep)
@@ -210,9 +267,10 @@ class Reconciler:
 
     def _check_trades(self, ledger, stmt, rep):
         """成交逐笔匹配：trade_id 优先，否则要素指纹。
-        对账单未提供成交流水（trades为空）时跳过本项——手工单可只填现金+持仓。"""
+        trades=None（未提供流水）跳过本项——手工单可只填现金+持仓；
+        trades=[]（已确认零笔）不跳过——账本当日成交一律判 missing_broker。"""
         as_of = stmt.as_of
-        if not stmt.trades:
+        if stmt.trades is None:
             return
         ledger_trades = [t for t in ledger._d['trades'] if str(t['date'])[:10] == as_of]
         rep.ledger_trades_n = len(ledger_trades)
@@ -253,6 +311,20 @@ class Reconciler:
                     broker_value=bt['quantity']))
             else:
                 rep.matched_trades += 1
+                # 同 ID 仍需核对全部要素（审计 2026-11-19 三-2：ID+数量+价格
+                # 相同但证券/方向/日期不同曾被判"一致"——同一回报ID指鹿为马）
+                if (str(lt['date'])[:10] != str(bt['date'])[:10]
+                        or lt['symbol'] != bt['symbol']
+                        or str(lt['side']).upper() != bt['side']):
+                    rep.matched_trades -= 1
+                    rep.diffs.append(ReconDiff(
+                        DIFF_ID_CONFLICT,
+                        f"同ID要素冲突：账本 {lt['side']} {lt['symbol']}"
+                        f"@{str(lt['date'])[:10]} vs 券商 {bt['side']} "
+                        f"{bt['symbol']}@{bt['date']}（key={k}，需人工核查）",
+                        symbol=bt['symbol'], ledger_value=float(lt['quantity']),
+                        broker_value=float(bt['quantity'])))
+                    continue
                 # 同 ID 仍需核对数量与价格（此前只查费用——同ID不同数量/价格会被判"一致"）
                 qty_diff = abs(int(lt['quantity']) - int(bt['quantity']))
                 px_diff = abs(float(lt['price']) - float(bt['price']))
@@ -303,9 +375,20 @@ class Reconciler:
                 "[Recon] QMT 对账单禁止 --fix：成交ID命名空间未统一"
                 "（账本 id:{oid}#{qty} vs 对账单 id:{order_id}），"
                 "自动补记会双记。请人工核对，或先完成 ID 规范化验证。")
+        # 二轮复审#9：历史账单禁止回写当前余额——1月2日账单会把1月3日
+        # 买入的持仓清掉、现金恢复到旧值，流水与余额失去一致性。账单日
+        # 之后存在成交或资金流（入金/出金，初始化基线除外）即拒绝修正。
+        last_recon = ledger._d.get('meta', {}).get('last_recon', {}).get('date', '')
+        if max(last_recon, ledger.latest_activity(include_initial=False)) > stmt.as_of:
+            raise ValueError(
+                f"拒绝修正历史账单：账单日期 {stmt.as_of} 之后存在账本活动"
+                f"（成交/资金流）——历史对账须按当日余额快照核对，"
+                f"不得回写当前余额/持仓")
         actions = []
-        fills = []  # 必须在开头初始化（此前仅在有漏记成交时赋值，无成交差异时UnboundLocalError）
+        fills = []
+        booked = []   # 无待补成交时为空列表（不依赖 if fills 分支赋值）
         as_of = stmt.as_of
+        pre_positions = dict(ledger.positions)   # 修正前持仓（推导可核实数量的基准）
 
         # 1) 补记券商成交（先补成交，再对齐数量/现金，避免双重修正）
         from live.broker import Order, Fill
@@ -326,42 +409,36 @@ class Reconciler:
                 booked, _, _blocked = ledger.apply_fills(fills)
                 actions.append(f"补记券商成交 {len(booked)} 笔")
 
-        # 2) 持仓数量对齐——区分成本基准处理
-        # 只依据实际成功入账的成交解释持仓差异（第七轮审查#1：
-        # 此前用"尝试补记的fills"判断依据——补记被阻止/只覆盖部分差异时
-        # 仍可能走 adjust_position 把数量上调但成本不重算=成本基准被污染）
-        # 第八轮审查：booked 在无待补成交时未赋值→UnboundLocalError（修）
-        if 'booked' not in dir():
-            booked = []   # 无待补成交时为空列表（不依赖 if fills 分支赋值）
+        # 2) 持仓数量对齐——只按"已核实成交"推导，绝不按券商数字凭空上调
+        # 审计 2026-11-19 三-1：此前 explained = 入账后持仓 + 已入账数量，
+        # 同一笔补记成交被计两次，"券商多出的无据部分"反而被判定为已解释：
+        # 空账本 + 券商150股 + 可核实买入100股 会被"修正"成150股。
+        # 正确口径：可核实数量 = 修正前持仓 + 已入账成交的有符号净数量；
+        # 券商超出该数量的部分一律成本未知，保留可核实数量不自动上调。
         all_syms = set(ledger.positions) | set(stmt.positions)
         n_pos = 0
         n_cost_unknown = 0
-        booked_syms = {f.order.symbol for f in booked} if booked else set()  # 实际入账
         for s in sorted(all_syms):
             lq, bq = ledger.positions.get(s, 0), stmt.positions.get(s, 0)
             if lq == bq:
                 continue
-            if bq > lq and s not in booked_syms:
+            signed = sum((f.quantity if f.order.side == 'BUY' else -f.quantity)
+                         for f in booked if f.order.symbol == s)
+            verified = pre_positions.get(s, 0) + signed
+            if bq > verified:
                 rep.diffs.append(ReconDiff(
                     DIFF_COST_BASIS,
-                    f"券商多出{bq - lq:+d}股且无成功入账成交（成本未知）",
+                    f"券商{bq}股 > 可核实{verified}股（未解释{bq - verified:+d}股"
+                    f"成本未知，保留已核实数量不自动上调）",
                     symbol=s, ledger_value=lq, broker_value=bq))
                 n_cost_unknown += 1
+                if lq != verified:
+                    ledger.adjust_position(s, verified,
+                                           f'账实核对修正（按已核实成交）@{as_of}', as_of=as_of)
+                    n_pos += 1
                 continue
-            if bq > lq and s in booked_syms:
-                # 有成交依据但补记可能只解释部分差异
-                booked_qty = sum(f.quantity for f in booked
-                                 if f.order.symbol == s and f.quantity > 0)
-                explained = lq + booked_qty
-                if bq > explained:
-                    rep.diffs.append(ReconDiff(
-                        DIFF_COST_BASIS,
-                        f"券商{bq}股 > 账本{lq}+成功入账{booked_qty}={explained}"
-                        f"（未解释{bq-explained:+d}股成本未知）",
-                        symbol=s, ledger_value=lq, broker_value=bq))
-                    n_cost_unknown += 1
-                    continue
-            ledger.adjust_position(s, bq, f'账实核对修正@{as_of}')
+            # 券商不多于可核实数量：账本多出（疑重复入账/送转未记）→ 券商为准下调
+            ledger.adjust_position(s, bq, f'账实核对修正@{as_of}', as_of=as_of)
             n_pos += 1
         if n_pos:
             actions.append(f"修正持仓 {n_pos} 只")
@@ -370,7 +447,7 @@ class Reconciler:
 
         # 3) 现金对齐（含费用差净额，统一以券商现金为准）
         if abs(ledger.cash - stmt.cash) > 0.005:
-            diff = ledger.adjust_cash(stmt.cash, f'账实核对修正@{as_of}')
+            diff = ledger.adjust_cash(stmt.cash, f'账实核对修正@{as_of}', as_of=as_of)
             actions.append(f"现金修正 {diff:+,.2f}")
 
         # 4) 记录对账结果（修正后重新核对；未自动处理项仍会体现为差异）

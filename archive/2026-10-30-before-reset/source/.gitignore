@@ -1,0 +1,44 @@
+# IDE
+.idea/
+.claude/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+# uv.lock 提交入库（精确复现环境；pyproject 的 == 与 lock 双保险）
+
+# 运行产物
+logs/
+results/
+ai-created/
+.pytest_cache/
+*.db
+.env
+data_cache/
+
+# 券商对账单（含账户敏感信息，勿提交）
+live/statements/
+# QMT在途订单台账（运行时状态）
+live/qmt_orders.json
+# 账本（运行态数据不进git，2026-10-27 8af4184 裁决；审计走 runtime 备份）
+live/ledger.json
+
+# 运行时状态（独立于源码部署；旧环境状态不随代码复制）
+runtime/
+
+# 损坏账本备份（含交易记录，不入库）
+live/ledger.json.corrupted_*
+live/*.bak
+live/*.backup

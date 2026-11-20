@@ -23,6 +23,9 @@
 """
 
 import json
+import copy
+import math
+from utils.state_file import exclusive_file, replace_json
 import os
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -147,13 +150,23 @@ class RiskGate:
         self.cfg = config or GateConfig()
         self.state_path = state_path
         self._anomalous: set = set()
-        self._state = self._load_state()
+        if state_path is not None and os.path.isfile(state_path):
+            with exclusive_file(state_path):
+                self._state = self._load_state()
+                if not self._state.get('_corrupt_state'):
+                    with open(state_path, encoding='utf8') as stream:
+                        original = json.load(stream)
+                    if original != self._state:
+                        replace_json(state_path, self._state)
+        else:
+            self._state = self._load_state()
+        self._loaded = copy.deepcopy(self._state)
 
     # ================= 状态持久化 =================
 
     def _load_state(self) -> dict:
         st = {'no_buy_until': None}
-        if os.path.isfile(self.state_path):
+        if self.state_path is not None and os.path.isfile(self.state_path):
             try:
                 with open(self.state_path, encoding='utf-8') as f:
                     st = json.load(f)
@@ -179,23 +192,18 @@ class RiskGate:
                     logger.warning(f"[RiskGate] 状态迁移 v{v}→v{STATE_SCHEMA_VERSION}:"
                                    f" 丢弃已被取代的字段 {k}={st.pop(k)}")
             st['schema_version'] = STATE_SCHEMA_VERSION
-            try:
-                self._save_state_raw(st)
-            except Exception:
-                pass
         return st
 
-    def _save_state_raw(self, st: dict):
-        with open(self.state_path, 'w', encoding='utf-8') as f:
-            json.dump(st, f, ensure_ascii=False, indent=1)
-
     def _save_state(self):
+        if self.state_path is None:
+            return
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(self.state_path)), exist_ok=True)
-            tmp = self.state_path + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(self._state, f, ensure_ascii=False, indent=1)
-            os.replace(tmp, self.state_path)   # 原子写（评审P1 2026-10-22）
+            with exclusive_file(self.state_path):
+                disk = self._load_state()
+                if disk != self._loaded or disk.get('_corrupt_state'):
+                    raise RuntimeError('Risk state changed or is unreadable')
+                replace_json(self.state_path, self._state)
+                self._loaded = copy.deepcopy(self._state)
         except Exception as e:
             logger.error(f"风控状态保存失败——阻断交易: {e}")
             raise RuntimeError(
@@ -226,6 +234,11 @@ class RiskGate:
                          这些标的的指令将被剔除）
         """
         as_of = as_of or date.today()
+        if self.state_path is not None:
+            disk = self._load_state()
+            if disk != self._loaded:
+                self._state = disk
+                self._loaded = copy.deepcopy(disk)
         d = RiskDecision()
 
         # 交易控制三态开关（最高优先级；状态来自 GateConfig 显式注入，
@@ -301,6 +314,7 @@ class RiskGate:
                         f'protocol_halted/liq_dates 字段重启')
                 else:
                     self._state['dd_anchor'] = nav_now   # 现金为重入新锚
+                    self._state['dd_anchor_date'] = str(as_of)
                     action, exposure = 'trade', 1.0
                     tag = '（研究对照）' if self.cfg.restart_after_liquidation else ''
                     d.reasons.append(
@@ -322,7 +336,7 @@ class RiskGate:
             n_ex = len(ledger.open_exceptions())
             d.reasons.append(f'[L2] 账本存在{n_ex}项未处理异常（超额卖出等）——'
                              '禁止新交易，人工核对后 resolve_exception 解锁')
-            if d.action != 'halt':
+            if d.action not in ('halt', 'liquidate'):
                 action = 'no_buy'
                 d.action = action
         last_recon = getattr(ledger, '_d', {}).get('meta', {}).get('last_recon', {})
@@ -330,7 +344,7 @@ class RiskGate:
             d.reasons.append(f'[L2] 上次对账({last_recon.get("date", "?")})不一致'
                              f'（{last_recon.get("n_diffs", "?")}项差异）——'
                              '禁止新交易，人工核对后 --statement --fix 或解锁')
-            if d.action != 'halt':
+            if d.action not in ('halt', 'liquidate'):
                 action = 'no_buy'
                 d.action = action
         elif last_recon:
@@ -342,7 +356,7 @@ class RiskGate:
                     if (as_of - rd).days > 3:
                         d.reasons.append(f'[L2] 上次对账({recon_date})距今超过3天——'
                                          '禁止新交易，先完成对账（--statement）')
-                        if d.action != 'halt':
+                        if d.action not in ('halt', 'liquidate'):
                             action = 'no_buy'
                             d.action = action
                 except (ValueError, TypeError):
@@ -364,12 +378,18 @@ class RiskGate:
                 d.exposure = exposure
 
         # L3.3 现金底线检查（此前仅回测有）
-        nav_pre = ledger.cash + sum(q * prices.get(s, 0) for s, q in ledger.positions.items())
+        marks = ledger._d.get('meta', {}).get('last_prices', {})
+        def mark(symbol):
+            price = prices.get(symbol)
+            return price if price and math.isfinite(price) and price > 0 else marks.get(symbol, 0.)
+        def notional(order):
+            return order.quantity * mark(order.symbol) if order.quantity else order.amount
+        nav_pre = ledger.cash + sum(q * mark(s) for s, q in ledger.positions.items())
         if action in ('trade', 'scale') and nav_pre > 0:
-            planned_buy = sum(o.amount for o in orders if o.side == 'BUY')
+            planned_buy = sum(notional(o) for o in orders if o.side == 'BUY')
             # 卖出回款纳入（评审P2：换仓日先卖后买，不纳入会误拦买入
             # 造成先卖隔日买的目标偏离）——保守折扣 0.9（滑点+费用+部分不成交）
-            planned_sell = sum(o.amount for o in orders if o.side == 'SELL')
+            planned_sell = sum(notional(o) for o in orders if o.side == 'SELL')
             sell_proceeds = planned_sell * chain_cfg.SELL_PROCEEDS_DISCOUNT
             projected_cash = ledger.cash + sell_proceeds - planned_buy
             min_cash = cfg.min_cash_ratio * nav_pre
@@ -391,8 +411,8 @@ class RiskGate:
         # L3.4 换手上限检查（此前仅回测有）
         if action in ('trade', 'scale') and orders:
             cur_w = ledger.current_weights(prices) if ledger.positions else {}
-            all_buy_w = sum(o.amount for o in orders if o.side == 'BUY') / max(nav_pre, 1)
-            all_sell_w = sum(o.amount for o in orders if o.side == 'SELL') / max(nav_pre, 1)
+            all_buy_w = sum(notional(o) for o in orders if o.side == 'BUY') / max(nav_pre, 1)
+            all_sell_w = sum(notional(o) for o in orders if o.side == 'SELL') / max(nav_pre, 1)
             planned_turnover = (all_buy_w + all_sell_w) / 2
             if planned_turnover > cfg.max_turnover:
                 d.reasons.append(
@@ -408,7 +428,7 @@ class RiskGate:
         forced = [] if action == 'liquidate' else self._enforce_stops(ledger, prices, as_of, d)
 
         # 指令重组
-        d.orders = self._assemble(orders, forced, action, exposure, ledger, prices, d)
+        d.orders = self._assemble(orders, forced, action, exposure, ledger, prices, d, as_of)
         self._save_state()
 
         n_forced = len(d.forced_sells)
@@ -423,7 +443,11 @@ class RiskGate:
         nav_hist = ledger.nav_series()
         if len(nav_hist) < window + 1:
             return None
-        navs = [h['nav'] for h in nav_hist[-(window + 1):]]
+        from data.semantics import flow_adjusted_navs
+        try:
+            navs = flow_adjusted_navs(nav_hist, ledger._d.get('cash_log', []))[-(window + 1):]
+        except ValueError:
+            return None
         rets = [(navs[i] / navs[i-1] - 1) for i in range(1, len(navs)) if navs[i-1] > 0]
         if len(rets) < window:
             return None
@@ -440,7 +464,9 @@ class RiskGate:
         bench_ok = False
         if bench_df is not None and len(bench_df) >= 2:
             last_dt = pd.Timestamp(bench_df['date'].iloc[-1])
-            if (pd.Timestamp(as_of) - last_dt).days <= cfg.max_bench_staleness:
+            closes = pd.to_numeric(bench_df['close'].tail(2), errors='coerce')
+            if (0 <= (pd.Timestamp(as_of) - last_dt).days <= cfg.max_bench_staleness
+                    and closes.map(lambda px: math.isfinite(px) and px > 0).all()):
                 bench_ok = True
         if not bench_ok:
             last_dt = str(bench_df['date'].iloc[-1]) if bench_df is not None and len(bench_df) else '无数据'
@@ -452,7 +478,7 @@ class RiskGate:
         # 2) 价格覆盖率（持仓∪目标：大量缺价=数据管道故障，停机）
         universe = list(ledger.positions.keys()) + [t for t in (targets or []) if t not in ledger.positions]
         if universe:
-            missing = [s for s in universe if prices.get(s, 0) <= 0]
+            missing = [s for s in universe if not math.isfinite(prices.get(s) or 0) or (prices.get(s) or 0) <= 0]
             coverage = 1 - len(missing) / len(universe)
             if coverage < cfg.min_price_coverage:
                 d.data_issues.append(
@@ -464,10 +490,10 @@ class RiskGate:
                     f"{len(missing)}只无最新价（疑似停牌，跳过其指令）：{','.join(missing[:5])}")
 
         # 3) 单日异常波动（|涨跌|>21% 超出任何板块涨跌停+容差 → 疑似脏数据）
-        self._anomalous = set()
+        self._anomalous = {s for s, p in prices.items() if not p or not math.isfinite(p) or p <= 0}
         if prev_prices:
             anomalies = [s for s, p in prices.items()
-                         if p > 0 and prev_prices.get(s, 0) > 0
+                         if p and math.isfinite(p) and p > 0 and prev_prices.get(s, 0) > 0
                          and abs(p / prev_prices[s] - 1) > cfg.anomaly_move]
             if anomalies:
                 rate = len(anomalies) / max(len(prices), 1)
@@ -476,7 +502,7 @@ class RiskGate:
                         f"异常价格占比{rate:.0%}>{cfg.max_anomaly_rate:.0%}"
                         f"（单日|涨跌|>{cfg.anomaly_move:.0%}，如{anomalies[:3]}），疑似数据错误")
                     return True
-                self._anomalous = set(anomalies)
+                self._anomalous.update(anomalies)
                 d.data_issues.append(
                     f"{len(anomalies)}只单日波动>{cfg.anomaly_move:.0%}（剔除其指令）："
                     f"{','.join(anomalies[:5])}")
@@ -498,30 +524,30 @@ class RiskGate:
         #    存取款不算市场盈亏：出金20万≠回撤20%——从 cash_log 中提取存取款
         #    并对 nav 序列做调整（加回出金/扣除入金）后再计算回撤。
         nav_hist = ledger.nav_series()
+        if not nav_hist and ledger.positions:
+            d.reasons.append('[L3] Missing NAV baseline with open positions')
+            return 'no_buy', 0.0, None
         if nav_hist:
-            navs = [h['nav'] for h in nav_hist]
-            dates_hist = [h['date'] for h in nav_hist]
-            # 提取存取款事件，调整净值序列
+            from data.semantics import flow_adjusted_navs
             cash_log = getattr(ledger, '_d', {}).get('cash_log', [])
-            flow_by_date = {}
-            for e in cash_log:
-                if e.get('type') in ('deposit', 'withdraw'):
-                    d_str = str(e.get('date', ''))[:10]
-                    flow_by_date[d_str] = flow_by_date.get(d_str, 0.0) + float(e.get('amount', 0))
-            # 从后往前累积流量，调整历史净值使其可比
-            if flow_by_date:
-                adj_navs = list(navs)
-                cum_flow = 0.0
-                for i in range(len(navs) - 1, -1, -1):
-                    dt = dates_hist[i][:10]
-                    cum_flow += flow_by_date.get(dt, 0.0)
-                    adj_navs[i] = navs[i] - cum_flow  # 加回出金/扣除入金
-                navs = adj_navs
+            try:
+                navs = flow_adjusted_navs(nav_hist, cash_log)
+            except ValueError as exc:
+                d.reasons.append(f'[L3] Invalid flow-adjusted NAV: {exc}')
+                return 'no_buy', 0.0, None
 
             peak, last = max(navs), navs[-1]
             if last >= peak:
                 self._state.pop('dd_anchor', None)   # 创新高：锚失效
+                self._state.pop('dd_anchor_date', None)
             anchor = self._state.get('dd_anchor')
+            anchor_date = self._state.get('dd_anchor_date')
+            if anchor and anchor_date:
+                # Keep the restart anchor in the same capital basis as NAVs.
+                for item, adjusted in zip(nav_hist, navs):
+                    if str(item['date'])[:10] == anchor_date:
+                        anchor = adjusted
+                        break
             peak_eff = anchor if (anchor and anchor < peak) else peak
             if peak_eff > 0:
                 dd = 1 - last / peak_eff
@@ -577,8 +603,6 @@ class RiskGate:
     def _enforce_stops(self, ledger, prices, as_of, d: RiskDecision) -> List[Order]:
         """个股硬止损 → 注入强制 SELL（T+1：当日买入的锁仓顺延；单日上限防踩踏）"""
         cfg = self.cfg
-        today_buys = {t['symbol'] for t in ledger._d['trades']
-                      if t['side'] == 'BUY' and t['date'] == str(as_of)}
         stopped = []
         _last = getattr(ledger, '_d', {}).get('meta', {}).get('last_prices', {})
         for sym, qty in ledger.positions.items():
@@ -595,7 +619,8 @@ class RiskGate:
                 continue
             ret = px / cost - 1
             if ret <= -cfg.stop_loss_pct:
-                if sym in today_buys:
+                qty = self._sellable(ledger, sym, as_of)
+                if qty <= 0:
                     d.reasons.append(f'[L4] {sym} 已破止损{ret:+.1%}，但当日买入（T+1锁仓），明日强制卖出')
                     continue
                 stopped.append((ret, sym, qty, px))
@@ -618,7 +643,14 @@ class RiskGate:
 
     # ================= 指令重组 =================
 
-    def _assemble(self, orders, forced, action, exposure, ledger, prices, d: RiskDecision) -> List[Order]:
+    @staticmethod
+    def _sellable(ledger, symbol, as_of):
+        qty = ledger.positions.get(symbol, 0)
+        locked = sum(t.get('quantity', qty) for t in ledger._d['trades']
+                     if t['symbol'] == symbol and t['side'] == 'BUY' and t['date'] == str(as_of))
+        return max(0, qty - locked)
+
+    def _assemble(self, orders, forced, action, exposure, ledger, prices, d: RiskDecision, as_of=None) -> List[Order]:
         """合并强制卖出与原始指令，应用熔断动作与仓位上限"""
         cfg = self.cfg
         forced_syms = {o.symbol for o in forced}
@@ -630,7 +662,7 @@ class RiskGate:
 
         def _val_px(s, default=0.0):
             p = prices.get(s)
-            if p is not None and p > 0:
+            if p is not None and math.isfinite(p) and p > 0:
                 return p
             return _last_px.get(s, default)
 
@@ -641,6 +673,7 @@ class RiskGate:
 
         if action == 'liquidate':
             for sym, qty in ledger.positions.items():
+                qty = self._sellable(ledger, sym, as_of)
                 if sym in forced_syms or qty <= 0:
                     continue
                 px = _val_px(sym)      # 缺价沿用最后有效价（与nav计算同口径）
@@ -672,12 +705,13 @@ class RiskGate:
                 # 缩量预算制：总买入预算 = 目标仓位市值−当前持仓市值；每单按原金额
                 # 足额占用预算，预算耗尽即止（每票已是 build_orders 的足额单票，
                 # 不再×exposure 切碎——碎片<最低申报会整批拒单，即缩量死锁成因）
-                alloc = min(o.amount, buy_budget)
+                requested = o.quantity * _val_px(o.symbol) if o.quantity else o.amount
+                alloc = min(requested, buy_budget)
                 if alloc < cfg.min_order_amount:
                     d.suppressed.append((o, f'[L3]缩量预算耗尽（余{buy_budget:,.0f}），放弃'))
                     continue
                 out.append(Order(o.symbol, 'BUY', o.target_weight,
-                                 quantity=o.quantity, amount=alloc,
+                                 quantity=0, amount=alloc,
                                  note=f'{o.note}｜[L3]缩量预算制(仓位上限{exposure:.0%})'))
                 buy_budget -= alloc
                 continue
@@ -688,20 +722,26 @@ class RiskGate:
         if nav > 0 and exposure < 0.999:
             inv_w = sum(q * _val_px(s) for s, q in ledger.positions.items()) / nav
             if inv_w > exposure + 0.02:
-                remaining = (inv_w - exposure) * nav
+                planned = {}
+                for sell in out:
+                    px = _val_px(sell.symbol)
+                    if sell.side == 'SELL' and px > 0:
+                        quantity = sell.quantity or int(sell.amount / px)
+                        planned[sell.symbol] = min(quantity, self._sellable(ledger, sell.symbol, as_of))
+                remaining = (inv_w - exposure) * nav - sum(q * _val_px(s) for s, q in planned.items())
                 holdings = sorted(((q * _val_px(s), s) for s, q in ledger.positions.items()),
                                   reverse=True)
                 for mv, s in holdings:
                     if remaining <= cfg.min_order_amount:
                         break
-                    if s in sells_in:
+                    if s in forced_syms or s in self._anomalous or s in self._stale:
                         continue
                     px = _val_px(s)
                     if px <= 0:
                         continue
                     # 部分减持按申报规则合法化（科创板/北交所1股递增；此前固定>=100整手）
                     from trading.rules import min_order_qty, qty_step
-                    raw = int(min(remaining, mv) / px)
+                    raw = min(self._sellable(ledger, s, as_of) - planned.get(s, 0), int(min(remaining, mv) / px))
                     step = qty_step(s)
                     qty = (raw // step) * step
                     if qty >= min_order_qty(s):

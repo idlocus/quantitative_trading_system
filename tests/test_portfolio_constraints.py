@@ -73,18 +73,21 @@ class TestVolTargetExecution:
 class TestMinCashRatioExecution:
     """现金底线：买入后现金<5%×NAV→缩减买入/预警"""
 
-    @pytest.mark.xfail(reason="现金计算基于positions+cash而非nav_history，测试数据需调整", strict=False)
     def test_low_cash_triggers_warning(self):
         """现金5万/NAV50万=10%，计划买入8万→买后现金-3万<底线2.5万→触发"""
         tmp = tempfile.mkdtemp()
         navs = [1_000_000] * 10  # NAV稳定100万（不触发回撤）
         led = _ledger(tmp, navs, cash=80_000)  # 现金8万（8%>5%底线，但买后3万<5万=5万）
+        led._d['positions'] = {'HELD.SH': 92000}
+        led._d['cost'] = {'HELD.SH': 10.0}
         orders = [Order('S001.SH', 'BUY', 0.01, amount=50_000)]  # 买5万→余3万<底线5万
         d = RiskGate(state_path=tmp + '/rg.json').review(
-            orders, led, {'S001.SH': 10.0}, {'S001.SH': 10.0}, ['S001.SH'],
+            orders, led, {'S001.SH': 10.0, 'HELD.SH': 10.0},
+            {'S001.SH': 10.0, 'HELD.SH': 10.0}, ['S001.SH'],
             bench_df=_bench(), as_of=date(2026, 10, 1))
         assert any('现金' in r and '底线' in r for r in d.reasons), \
             "买入后现金低于底线应预警"
+        assert sum(o.amount for o in d.orders if o.side == 'BUY') <= 30000 + 1e-8
 
 
 class TestMaxTurnoverExecution:

@@ -1,0 +1,26 @@
+{
+  "study": "first_stock_signal_screen",
+  "start": "2016-01-01",
+  "train_end": "2020-12-31",
+  "validation_end": "2023-12-31",
+  "holdout_start": "2024-01-01",
+  "signals": ["momentum_20", "reversal_5", "low_volatility_20"],
+  "label": "adjusted_close[t+6] / adjusted_close[t+1] - 1",
+  "horizon_sessions": 5,
+  "minimum_history_sessions": 120,
+  "liquidity_window": 20,
+  "minimum_median_daily_amount_local_currency": 20000000,
+  "minimum_cross_section": 30,
+  "hac_lags": 5,
+  "exclude_a_st_types": ["S", "X", "Y", "P", "L", "T", "Z"],
+  "a_universe": "Native A-share stock codes and historical listing intervals; no current-survivor filter.",
+  "hk_universe": "Frozen current-connect sample, bounded by listing intervals; user-accepted survivorship bias.",
+  "portfolio_backtest": false,
+  "risk_limits_evaluated": false,
+  "limitations": [
+    "Five-session labels overlap; uncertainty uses HAC instead of independent-day standard errors.",
+    "Adjusted-price labels are theoretical price paths, not executable, cost-adjusted or currency-converted account returns.",
+    "Unavailable forward labels are counted, including delisting and source gaps; they are not assigned zero returns.",
+    "This is exploratory signal selection; no claim of monthly absolute returns or 15 percent risk compliance."
+  ]
+}

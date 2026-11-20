@@ -49,19 +49,23 @@ def extract_prices(cache: dict, symbols: list, as_of,
     Args:
         basis: 'raw'=实盘撮合 | 'adjusted'=回测净值
     """
-    col = None
     prices = {}
     for sym in symbols:
         df = cache.get(sym)
         if df is None or df.empty:
             continue
-        if col is None:
-            col = get_price_column(df, basis)
-        d = df[df['date'] <= pd.Timestamp(as_of)] if 'date' in df.columns else df
+        col = get_price_column(df, basis)
+        if 'date' in df:
+            days = pd.DatetimeIndex(pd.to_datetime(df['date'].astype(str), format='mixed'))
+        elif isinstance(df.index, pd.DatetimeIndex):
+            days = df.index
+        else:
+            raise ValueError('Prices require a date column or DatetimeIndex')
+        d = df.set_axis(days).loc[days <= pd.Timestamp(as_of)].sort_index()
         if d.empty:
             continue
         px = float(d[col].iloc[-1]) if col in d.columns else 0.0
-        if px > 0:
+        if np.isfinite(px) and px > 0:
             prices[sym] = px
     return prices
 
@@ -150,6 +154,35 @@ def should_halt_signal(coverage: float, n_targets: int,
 
 # ================= 净值与回撤 =================
 
+def flow_adjusted_navs(nav_history: list, cash_log: list) -> list:
+    """Unitize returns net of end-of-day flows, rebased to current capital.
+
+    The first observation already includes opening capital. Daily NAV records
+    cannot resolve intraday flow timing, so subsequent flows are treated as
+    arriving after that day's market return.
+    """
+    if not nav_history:
+        return []
+    flows = {}
+    for event in cash_log:
+        if event.get('type') in ('deposit', 'withdraw'):
+            day = str(event['date'])[:10]
+            flows[day] = flows.get(day, 0.0) + float(event['amount'])
+    navs = [float(item['nav']) for item in nav_history]
+    if not all(np.isfinite(v) and v > 0 for v in navs):
+        raise ValueError('NAV observations must be finite and positive')
+    units = [1.0]
+    for i in range(1, len(navs)):
+        previous_day = str(nav_history[i - 1]['date'])[:10]
+        day = str(nav_history[i]['date'])[:10]
+        flow = sum(value for dt, value in flows.items() if previous_day < dt <= day)
+        market_nav = navs[i] - flow
+        if not np.isfinite(market_nav) or market_nav <= 0:
+            raise ValueError('External flows leave an invalid market NAV')
+        units.append(units[-1] * market_nav / navs[i - 1])
+    scale = navs[-1] / units[-1]
+    return [value * scale for value in units]
+
 def drawdown_from_series(nav: pd.Series) -> float:
     """
     从净值序列计算最大回撤。
@@ -161,7 +194,7 @@ def drawdown_from_series(nav: pd.Series) -> float:
     return float((nav / nav.cummax() - 1).min())
 
 
-def current_drawdown(nav_history: list) -> tuple:
+def current_drawdown(nav_history: list, cash_log=()) -> tuple:
     """
     当前回撤（基于账本净值序列，排除存取款影响）。
 
@@ -170,7 +203,7 @@ def current_drawdown(nav_history: list) -> tuple:
     """
     if not nav_history:
         return 0.0, 0.0
-    navs = [h['nav'] for h in nav_history]
+    navs = flow_adjusted_navs(nav_history, cash_log) if cash_log else [h['nav'] for h in nav_history]
     peak, last = max(navs), navs[-1]
     if peak <= 0:
         return 0.0, peak
@@ -191,11 +224,20 @@ def planned_exposure(n_targets: int, top_n: int) -> tuple:
     return exposure, 1.0 - exposure
 
 
-def actual_cash_ratio(cash: float, positions: dict, prices: dict) -> float:
+def actual_cash_ratio(cash: float, positions: dict, prices: dict, last_prices=None) -> float:
     """
     当前账户现金比例（用最后有效价兜底）。
     """
-    mv = sum(q * prices.get(s, 0) for s, q in positions.items())
+    mv = 0.
+    for symbol, qty in positions.items():
+        if not qty:
+            continue
+        price = prices.get(symbol)
+        if price is None or not np.isfinite(price) or price <= 0:
+            price = (last_prices or {}).get(symbol)
+        if price is None or not np.isfinite(price) or price <= 0:
+            raise ValueError(f'Missing valuation price for {symbol}')
+        mv += qty * price
     total = cash + mv
     if total <= 0:
         return 1.0

@@ -32,15 +32,19 @@ class RobustnessReport:
     dsr: Optional[float] = None       # Deflated Sharpe Ratio
     yearly_returns: Dict[int, float] = field(default_factory=dict)
     regime_performance: Dict[str, dict] = field(default_factory=dict)
-    param_sensitivity: Dict[str, List[Tuple[float, float]]] = field(default=dict)
+    # 2026-11-04 修复：原 field(default=dict) 把 dict 类本身当默认值，
+    # 实例未显式传参时 summary_markdown 遍历 dict.items() 直接 TypeError
+    # （由 tests/test_research_toolbox.py 行为测试暴露）
+    param_sensitivity: Dict[str, List[Tuple[float, float]]] = field(default_factory=dict)
     stability_score: float = 0.0       # 综合稳定性评分 (0-100)
     warnings: List[str] = field(default_factory=list)
 
     def summary_markdown(self) -> str:
         lines = ["## 稳健性验证\n"]
         lines.append(f"- **累计实验次数**: {self.n_trials}")
-        lines.append(f"- **Deflated Sharpe**: {self.dsr:.3f} "
-                    f"({'通过' if self.dsr and self.dsr > 0.95 else '未通过（可能过拟合）'}")
+        dsr = f"{self.dsr:.3f}" if self.dsr is not None else "数据不足"
+        lines.append(f"- **Deflated Sharpe**: {dsr} "
+                    f"({'通过' if self.dsr and self.dsr > 0.95 else '未通过（可能过拟合）'})")
         lines.append(f"- **稳定性评分**: {self.stability_score:.0f}/100")
         if self.warnings:
             lines.append("\n**警告**:")
@@ -75,11 +79,18 @@ def compute_dsr(returns: pd.Series, n_trials: int) -> float:
 
 
 def yearly_breakdown(equity: pd.Series) -> Dict[int, float]:
-    """逐年收益分解"""
+    """逐年收益分解（以上年末净值为基数）。
+
+    审计 2026-11-19 四-h：此前各年末值除以**当年首日收盘值**——遗漏跨年
+    首个交易日的盈亏，可能改变正收益年份比例。首年无上年基数，沿用当年
+    首值（等价于从首日起算）。"""
     returns = {}
+    prev_base = None
     for year, group in equity.groupby(equity.index.year):
         if len(group) >= 10:
-            returns[int(year)] = float(group.iloc[-1] / group.iloc[0] - 1)
+            base = prev_base if prev_base is not None else float(group.iloc[0])
+            returns[int(year)] = float(group.iloc[-1] / base - 1)
+        prev_base = float(group.iloc[-1])
     return returns
 
 

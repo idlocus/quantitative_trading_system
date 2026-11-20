@@ -26,12 +26,18 @@ miniQMT 实盘交易接口
 """
 
 import json
+import math
+import uuid
+import copy
+import threading
+from functools import wraps
+from utils.state_file import exclusive_file, replace_json
 import os
 import time
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from .broker import Order, Fill, Broker
+from .broker import Order, Fill, Broker, valid_order
 
 if TYPE_CHECKING:      # 注解引用（防循环导入；pyflakes 可解析）
     from live.reconcile import BrokerStatement
@@ -107,6 +113,14 @@ class QMTOrderState:
     REJECTED = XT['ORDER_REJECTED']    # 57: 废单
 
 
+def _serialized(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._mutex:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class QMTBroker(Broker):
     # 生产入账模式标记（run_daily/run_live 依此传 ledger 实现原子入账）
     ATOMIC_LEDGER_BOOKING = True
@@ -121,7 +135,7 @@ class QMTBroker(Broker):
                  state_path: str = DEFAULT_ORDER_STATE,
                  order_timeout: float = 30,
                  enforce_window: bool = True,
-                 switch_state: str = 'NORMAL'):
+                 switch_state=None):
         """enforce_window=True（默认）：非收盘竞价窗口直接拒单（策略撮合假设=T日
         收盘价，窗口外成交价将系统性偏离假设）。需窗口外执行时显式传 False
         （CLI: run_daily/run_live 的 --outside-window）。
@@ -132,6 +146,9 @@ class QMTBroker(Broker):
         self.qmt_path = qmt_path or QMT_PATH
         self.order_timeout = order_timeout       # 单笔等待终态时长（秒）
         self.enforce_window = enforce_window
+        if switch_state is None:
+            from scripts.trading_switch import effective_state
+            switch_state = effective_state
         self.switch_state = switch_state
         self._xt_trader = None
         self._account = None
@@ -139,7 +156,9 @@ class QMTBroker(Broker):
         self._order_callbacks = {}  # order_id -> callback info
         # 在途订单台账（订单生命周期状态，崩溃/重启后可续）：{oid: {symbol, side, qty, booked, status}}
         self.state_path = state_path
+        self._mutex = threading.RLock()
         self._pending = self._load_state()
+        self._persisted = copy.deepcopy(self._pending)
 
     def name(self):
         return 'QMTBroker'
@@ -185,6 +204,7 @@ class QMTBroker(Broker):
                 raise RuntimeError(f"QMT 账户订阅失败（错误码 {result}）")
 
             self._connected = True
+            self._requires_ledger = True
             logger.info(f"[QMT] 已连接 | 账户 {self.account_id}")
             return True
 
@@ -243,8 +263,10 @@ class QMTBroker(Broker):
         需要 QMT 客户端运行中；未连接时抛 RuntimeError。
         """
         from live.reconcile import BrokerStatement
-        self._ensure_connected()
         as_of = as_of or date.today()
+        if str(as_of) != date.today().isoformat():
+            raise ValueError("QMT provides current-day statements only")
+        self._ensure_connected()
 
         asset = self._xt_trader.query_stock_asset(self._account)
         # B8补强：None≠零值——查询失败时拒绝对账
@@ -257,6 +279,8 @@ class QMTBroker(Broker):
             raise RuntimeError("QMT持仓查询None——数据不可用（非空仓）")
         positions = {}
         for pos in raw_pos:
+            if not float(pos.volume).is_integer() or pos.volume < 0:
+                raise ValueError('Invalid broker position')
             if pos.volume > 0:
                 positions[pos.stock_code] = int(pos.volume)
 
@@ -265,19 +289,56 @@ class QMTBroker(Broker):
             raise RuntimeError("QMT成交查询None——流水不可用，不能判账实一致")
         trades = []
         for t in raw_trades:
-            d = datetime.fromtimestamp(t.traded_time).date() if getattr(t, 'traded_time', 0) else as_of
-            trades.append({
-                'date': str(d)[:10], 'symbol': t.stock_code,
-                'side': 'BUY' if t.offset_flag == 48 else 'SELL',  # xtquant: 48买/49卖
-                'price': float(t.traded_price or 0),
-                'quantity': int(t.traded_volume or 0),
-                'commission': float(getattr(t, 'traded_fee', 0) or 0),
-                'taxes': 0.0,  # QMT成交回报费用合计，税费拆分以交割单为准
-                'trade_id': str(getattr(t, 'order_id', '') or ''),
-            })
+            trades.append(self._execution_row(t))
 
         return BrokerStatement(as_of=str(as_of)[:10], cash=cash, positions=positions,
                                trades=trades, source='qmt')
+
+    @staticmethod
+    def _execution_row(t):
+        if not getattr(t, 'traded_time', 0):
+            raise ValueError("Missing broker execution time")
+        side = {XT['STOCK_BUY']: 'BUY', XT['STOCK_SELL']: 'SELL'}.get(getattr(t, 'order_type', None))
+        if side is None:
+            side = {48: 'BUY', 49: 'SELL'}.get(getattr(t, 'offset_flag', None))
+        tid = str(getattr(t, 'traded_id', '') or '')
+        if side is None or not tid:
+            raise ValueError("Unidentified broker execution")
+        qty = float(t.traded_volume)
+        price = float(t.traded_price)
+        fee = float(getattr(t, 'traded_fee', 0) or 0)
+        if not (qty.is_integer() and qty > 0 and math.isfinite(price) and price > 0
+                and math.isfinite(fee) and fee >= 0):
+            raise ValueError("Invalid execution quantities or fees")
+        return dict(date=datetime.fromtimestamp(t.traded_time).date().isoformat(),
+                    symbol=t.stock_code, side=side, price=price, quantity=int(qty),
+                    commission=fee, taxes=0., trade_id=tid)
+
+    def _book_executions(self, order, ref, traded, ledger, status):
+        rec = self._pending[ref]
+        real_oid = self._resolve_oid(ref)
+        if not real_oid or ledger is None:
+            raise ValueError('Execution booking requires broker order ID and ledger')
+        if rec.get('booked') and 'execution_ids' not in rec:
+            raise ValueError('Legacy cumulative fills require reconciliation')
+        rows = [self._execution_row(t) for t in self._xt_trader.query_stock_trades(self._account)
+                if str(t.order_id) == str(real_oid)]
+        ids = [row['trade_id'] for row in rows]
+        if (len(set(ids)) != len(ids) or sum(r['quantity'] for r in rows) != traded
+                or not set(rec.get('execution_ids', [])).issubset(ids)
+                or any(r['symbol'] != order.symbol or r['side'] != order.side for r in rows)):
+            raise ValueError('Order and execution records disagree')
+        fills = [Fill(order, r['price'], r['quantity'], r['commission'], r['taxes'],
+                      r['date'], status, r['trade_id']) for r in rows]
+        booked, _, blocked = ledger.apply_fills(fills)
+        if blocked:
+            raise ValueError('Execution blocked by ledger')
+        rec['execution_ids'] = ids
+        quantity = sum(f.quantity for f in booked)
+        value = sum(f.quantity * f.price for f in booked)
+        return Fill(order, value / quantity if quantity else 0., quantity,
+                    sum(f.commission for f in booked), sum(f.taxes for f in booked),
+                    rows[-1]['date'], status)
 
     # ==================== 下单接口 ====================
 
@@ -304,19 +365,28 @@ class QMTBroker(Broker):
 
         # F3: 交易控制状态在 QMT 侧二次检查（RiskGate 之后的最后防线；
         # 状态来自构造注入，热路径不读文件系统）
-        _sw = self.switch_state
+        _sw = self.switch_state() if callable(self.switch_state) else self.switch_state
+        if getattr(self, '_requires_ledger', False) and not callable(self.switch_state):
+            from scripts.trading_switch import effective_state
+            live_state = effective_state()
+            if live_state == 'HALT_ALL' or _sw == 'NORMAL':
+                _sw = live_state
+        if _sw not in ('NORMAL', 'CLOSE_ONLY', 'HALT_ALL'):
+            _sw = 'HALT_ALL'
         if _sw == 'HALT_ALL':
             logger.error("[QMT] 交易控制=HALT_ALL，拒单+撤所有在途订单")
             # B7（2026-10-22）：紧急停止不仅拦新单——已挂出的旧买单若不撤
             # 仍会成交、继续扩大敞口。撤单尽力而为+留痕（撤不掉的告警）
             try:
-                n_cancelled = self.cancel_all_pending()
-                if n_cancelled:
-                    logger.warning(f"[QMT] HALT_ALL 已撤 {n_cancelled} 笔在途订单")
+                remaining = self.cancel_all_pending()
+                if remaining:
+                    logger.critical(f"[QMT] HALT_ALL: {remaining} orders still unresolved")
             except Exception as e:
                 logger.critical(f"[QMT] HALT_ALL 撤单异常——人工核查券商App: {e}")
             return [Fill(o, 0, 0, 0, 0, trade_date,
                          status='rejected(HALT_ALL)') for o in orders]
+        if getattr(self, '_requires_ledger', False) and ledger is None:
+            raise ValueError('Live execution requires a ledger')
         if _sw == 'CLOSE_ONLY':
             orders = [o for o in orders if o.side != 'BUY']
             if not orders:
@@ -333,17 +403,75 @@ class QMTBroker(Broker):
                            "成交价将偏离收盘价撮合假设，后果自担")
         fills = []
 
+        # 二轮复审#4：任何券商调用前校验委托要素——非法方向此前被
+        # `XT['STOCK_BUY'] if side=='BUY' else SELL` 映射成真实卖单。
+        valid_orders, rejected = [], []
+        for o in orders:
+            if o.side not in ('BUY', 'SELL'):
+                logger.error(f"[QMT] 拒绝非法方向委托 {o.symbol} side={o.side!r}")
+                rejected.append(Fill(o, 0, 0, 0, 0, trade_date,
+                                     status='rejected(invalid side)'))
+            elif not valid_order(o, prices.get(o.symbol)):
+                rejected.append(Fill(o, 0, 0, 0, 0, trade_date,
+                                     status='rejected(invalid quantity)'))
+            else:
+                valid_orders.append(o)
+        fills.extend(rejected)
+        if not valid_orders:
+            return fills
+
         # 排序：卖出在前（释放资金供买入）
-        sorted_orders = sorted(orders, key=lambda o: 0 if o.side == 'SELL' else 1)
+        sorted_orders = sorted(valid_orders, key=lambda o: 0 if o.side == 'SELL' else 1)
 
         running_cash = available_cash if available_cash is not None else self.get_cash()
 
-        for order in sorted_orders:
+        # 二轮复审#6：execute 开头不再盲目重置 query_failed——存在未确认
+        # 终态的在途/待确认记录时保持阻断（防旧单未核实就提交新批）。
+        unresolved = self._pending
+        if unresolved:
+            self.query_failed = True
+            logger.error(f"[QMT] {len(unresolved)} 条在途记录未确认终态，"
+                         "本批全部拒绝（先 sync_pending 或人工核对）")
+            return fills + [Fill(o, 0, 0, 0, 0, trade_date,
+                                 status='rejected(unresolved pending records)')
+                            for o in sorted_orders]
+        self.query_failed = False
+        # 二轮复审#4：同批逐笔扣减可卖数量；已知持仓表缺符号按 0（不得
+        # 用申报数顶替持仓）。
+        sellable = dict(positions) if positions is not None else None
+        if getattr(self, '_requires_ledger', False) and any(o.side == 'SELL' for o in sorted_orders):
+            holdings = self._xt_trader.query_stock_positions(self._account)
+            if holdings is None:
+                raise RuntimeError('Broker sellable quantities unavailable')
+            broker_sellable = {p.stock_code: max(0, int(p.can_use_volume)) for p in holdings}
+            sellable = broker_sellable if sellable is None else {
+                sym: min(qty, broker_sellable.get(sym, 0)) for sym, qty in sellable.items()}
+        for index, order in enumerate(sorted_orders):
+            if sellable is not None and order.side == 'SELL':
+                holding = sellable.get(order.symbol, 0)
+                if order.quantity > 0 and order.quantity > holding:
+                    order = Order(order.symbol, order.side, order.target_weight,
+                                  quantity=max(0, holding), note=order.note)
+                    if order.quantity <= 0:
+                        fills.append(Fill(order, 0, 0, 0, 0, trade_date,
+                                          status='rejected(no holding)'))
+                        continue
             fill = self._execute_single(order, prices, trade_date, running_cash,
-                                        positions=positions, ledger=ledger)
+                                        positions=sellable, ledger=ledger)
             fills.append(fill)
+            if self._pending or fill.status.startswith('query_failed') or \
+                    fill.status.startswith('open'):
+                # 审计 2026-11-19 三-4：订单结果未确认（查询失败，或超时
+                # 撤单后仍在途/非终态部分成交）→ 停止本批后续委托。
+                self.query_failed = True
+                fills.extend(Fill(o, 0, 0, 0, 0, trade_date,
+                                  status='rejected(previous order unconfirmed)')
+                             for o in sorted_orders[index + 1:])
+                break
 
-            # 更新运行时现金（含费用；部分成交同样占用/释放资金）
+            # 更新运行时现金与可卖数量（含费用；部分成交同样占用/释放资金）
+            if fill.quantity > 0 and sellable is not None and order.side == 'SELL':
+                sellable[order.symbol] = max(0, sellable.get(order.symbol, 0) - fill.quantity)
             if fill.quantity > 0:
                 if order.side == 'BUY':
                     running_cash -= fill.price * fill.quantity + fill.commission + fill.taxes
@@ -364,7 +492,7 @@ class QMTBroker(Broker):
         - 未终态残量由 sync_pending 在下次执行前继续补记
         """
         price = prices.get(order.symbol, 0)
-        if price <= 0:
+        if not valid_order(order, price) or not math.isfinite(running_cash):
             return Fill(order, 0, 0, 0, 0, trade_date, status='rejected(无价格)')
 
         # 申报数量（主板/创业板100整手；科创板≥200且1股递增；北交所≥100且1股递增）
@@ -378,7 +506,7 @@ class QMTBroker(Broker):
         elif positions is not None:
             # 卖出合法化（与 PaperBroker 同规则：零股一次性=全仓申报恒合法）
             qty = round_sell_qty(order.symbol, qty,
-                                 positions.get(order.symbol, qty))
+                                 positions.get(order.symbol, 0))
         else:
             step = qty_step(order.symbol)
             fixed = (qty // step) * step
@@ -399,6 +527,8 @@ class QMTBroker(Broker):
         if not oid:
             return Fill(order, price, 0, 0, 0, trade_date, status='rejected(下单失败)')
 
+        if self._pending.get(oid, {}).get('status') == 'unknown':
+            return Fill(order, price, 0, 0, 0, trade_date, 'query_failed(unknown acknowledgement)')
         status, traded, avg_px = self._await_order(oid, timeout=self.order_timeout,
                                                    cancel_on_timeout=True)
         return self._book_order_fill(order, oid, status, traded, avg_px,
@@ -406,6 +536,7 @@ class QMTBroker(Broker):
 
     # ---- 订单生命周期原语（真实实现走 xtquant；测试注入假实现） ----
 
+    @_serialized
     def _submit_order(self, order: Order, qty: int, price: float) -> Optional[str]:
         """提交委托，返回跟踪键（客户端引用）并登记在途台账。
 
@@ -418,30 +549,51 @@ class QMTBroker(Broker):
           （2026-10-15 重写：旧版把 seq 当订单号去查询，永远匹配不上
           真实订单 → 永远"已报未成交"→ 超时撤错单 → 成交丢失）。
         """
+        if self._pending:
+            raise RuntimeError('Resolve prior orders before submitting a new intent')
         direction = XT['STOCK_BUY'] if order.side == 'BUY' else XT['STOCK_SELL']
         price_type = XT['LATEST_PRICE']   # 最新价（接近市价；收盘竞价适用）
         price_val = 0                     # LATEST_PRICE 时 price=0
-        self._ref_counter = getattr(self, '_ref_counter', 0) + 1
-        ref = f'cr{int(time.time() * 1000) % 10**8:08d}{self._ref_counter:04d}'
+        ref = 'cr' + uuid.uuid4().hex
+        # 审计 2026-11-19 三-4：先持久化下单意图，再向券商提交——此前先
+        # 提交后落盘，ack 与 _save_state 之间退出 = 券商在途单在本地无任何
+        # 记录，重启后 sync_pending 无从核对（丢单窗口）。意图先落盘后，
+        # 中途退出也能按 order_remark 引用与券商核对；若提交从未到达券商，
+        # sync_pending 查无此单 → 持续阻断，等待人工处理（fail-safe）。
+        self._pending[ref] = {'symbol': order.symbol, 'side': order.side,
+                              'qty': int(qty), 'booked': 0,
+                              'status': 'submitting',
+                              'submitted_at': str(datetime.now()),
+                              'ref': ref, 'oid': None, 'seq': None}
+        self._save_state()
         try:
             ack = self._xt_trader.order_stock_async(
                 self._account, order.symbol, direction, qty, price_type,
                 price_val, 'quant', ref)   # strategy_name, order_remark=ref
         except Exception as e:
-            logger.error(f"[QMT] 下单异常 {order.symbol}: {e}")
-            return None
-        if ack is None or ack == -1:
+            # 二轮复审#5：回执丢失（超时/连接断）≠ 被拒——柜台可能已收单。
+            # 保留意图为 unknown（sync_pending 按引用核对、execute 阻断新批），
+            # 只在明确拒绝（ack None/-1）时清退。
+            self._pending[ref]['status'] = 'unknown'
+            self._save_state()
+            logger.error(f"[QMT] 下单回执异常 {order.symbol}（意图保留为 unknown）: {e}")
+            return ref
+        if type(ack) is not int or ack < -1:
+            self._pending[ref]['status'] = 'unknown'
+            self._save_state()
+            return ref
+        if type(ack) is int and ack == -1:
+            self._pending.pop(ref, None)
+            self._save_state()
             return None              # -1 = 下单请求被拒
-        self._pending[ref] = {'symbol': order.symbol, 'side': order.side,
-                              'qty': int(qty), 'booked': 0,
-                              'status': XT['ORDER_PENDING'],
-                              'submitted_at': str(datetime.now()),
-                              'ref': ref, 'oid': None, 'seq': ack}
+        self._pending[ref]['seq'] = ack
+        self._pending[ref]['status'] = XT['ORDER_PENDING']
         self._save_state()
         return ref
 
     # ---- 回调实现（xtquant 单参签名；见文件末"xtquant 回调"区，勿重复定义） ----
 
+    @_serialized
     def _resolve_oid(self, tracking_key: str) -> Optional[str]:
         """跟踪键（客户端引用）→ 真实订单号。
 
@@ -473,8 +625,10 @@ class QMTBroker(Broker):
             return -1, -1, 0.0
         try:
             for o in (self._xt_trader.query_stock_orders(self._account) or []):
-                if str(o.order_id) == str(oid):
-                    return int(o.order_status), int(o.traded_volume or 0), \
+                if (str(o.order_id) == str(oid) and
+                        str(getattr(o, 'order_remark', '') or '') in ('', str(order_id))):
+                    status = QMTOrderState.CANCELLED if o.order_status == 53 else int(o.order_status)
+                    return status, o.traded_volume or 0, \
                         float(o.traded_price or 0)
         except Exception as e:
             logger.warning(f"[QMT] 查询订单异常（不可确认状态）: {e}")
@@ -487,7 +641,8 @@ class QMTBroker(Broker):
             logger.error(f"[QMT] 撤单失败：引用 {order_id} 未映射到真实订单号")
             return False
         try:
-            return self._xt_trader.cancel_order_stock_async(self._account, oid) == 0
+            ack = self._xt_trader.cancel_order_stock_async(self._account, oid)
+            return type(ack) is int and ack >= 0
         except Exception as e:
             logger.warning(f"[QMT] 撤单失败 {oid}: {e}")
             return False
@@ -512,6 +667,7 @@ class QMTBroker(Broker):
             status, traded, px = self._query_order(order_id)
         return status, traded, px
 
+    @_serialized
     def _book_order_fill(self, order: Order, oid, status, traded, avg_px,
                          ref_price, qty, trade_date, ledger=None) -> Fill:
         """增量入账：本次已成交 − 台账已入账；trade_id=oid#累计量（重放幂等）。
@@ -527,16 +683,30 @@ class QMTBroker(Broker):
         # 查询失败哨兵（traded=-1）不得污染台账（2026-10-30，P0#8）：
         # 旧逻辑 booked=-1 → 恢复后 delta=traded-(-1)=traded+1 多入账。
         # 查询失败=成交不可确认 → 台账原地保留，交 sync_pending 复核。
-        if int(traded) < 0:
-            return Fill(order, float(ref_price), 0, 0, 0, trade_date,
-                        f'query_failed(status={status})')
+        if (not isinstance(traded, (int, float)) or not math.isfinite(traded)
+                or not float(traded).is_integer() or traded < int(rec.get('booked', 0))
+                or traded > qty or (status == QMTOrderState.FILLED and traded != qty)
+                or (traded > 0 and (not isinstance(avg_px, (float, int))
+                                    or not math.isfinite(avg_px) or avg_px <= 0))):
+            self.query_failed = True
+            return Fill(order, 0, 0, 0, 0, trade_date,
+                        f'query_failed(contradictory or unavailable execution: status={status})')
+        # 二轮复审#7：无账本且有未入账增量 → 返回成交供调用方入账，但
+        # **不推进/不清退台账**（此前允许推进=成交可能永久丢失）
+        no_ledger_delta = int(traded) > int(rec.get('booked', 0)) and ledger is None
         prev = int(rec.get('booked', 0))
         delta = int(traded) - prev
 
         if int(traded) >= int(qty) > 0 or status == QMTOrderState.FILLED:
             status_str = 'filled'
         elif int(traded) > 0:
-            status_str = f'partial({traded}/{qty})'
+            if status in (QMTOrderState.CANCELLED, QMTOrderState.REJECTED):
+                status_str = f'partial({traded}/{qty})'   # 终态部分成交（撤单/废单）
+            else:
+                # 非终态部分成交：明确标 open（审计 2026-11-19 三-4——此前
+                # 与终态部分成交同写 partial(n/m)，批处理无从区分，在途残量
+                # 之后仍可能成交，后续买单复用已被占用的预算）
+                status_str = f'open({status}, partial {traded}/{qty})'
         elif status == QMTOrderState.CANCELLED:
             status_str = 'cancelled'
         elif status == QMTOrderState.REJECTED:
@@ -545,24 +715,53 @@ class QMTBroker(Broker):
             status_str = f'open({status})'    # 撤单中/在途，残量由 sync_pending 补记
 
         px = float(avg_px) if avg_px and avg_px > 0 else float(ref_price)
+        if delta < 0 or (delta > 0 and px <= 0):
+            self.query_failed = True
+            return Fill(order, 0, 0, 0, 0, trade_date,
+                        'query_failed(inconsistent execution quantity or price)')
         booking_ok = True
-        if delta > 0 and px > 0:
+        if delta > 0 and hasattr(self._xt_trader, 'query_stock_trades'):
+            try:
+                fill = self._book_executions(order, oid, traded, ledger, status_str)
+            except (AttributeError, RuntimeError, TypeError, OSError, ValueError) as exc:
+                self.query_failed = True
+                return Fill(order, 0, 0, 0, 0, trade_date, f'query_failed({exc})')
+            no_ledger_delta = False
+        elif delta > 0 and px > 0:
             # 增量价格：用累计成本差除以增量数量（券商返回的是累计均价，
             # 直接用于增量段会高估/低估部分成交的实际成交价）
-            prev_cost = float(rec.get('booked_cost', 0.0))
             total_cost = float(traded) * px
+            if prev > 0 and 'booked_cost' not in rec:
+                # Older recovery records did not persist cumulative cost.
+                # Reconstruct it from confirmed ledger fills or stop safely.
+                prior_fills = [] if ledger is None else [
+                    t for t in ledger._d['trades']
+                    if str(t.get('trade_id', '')).startswith(f'{oid}#')
+                    and str(t['trade_id']).rsplit('#', 1)[-1].isdigit()
+                    and int(str(t['trade_id']).rsplit('#', 1)[-1]) <= prev]
+                if sum(t['quantity'] for t in prior_fills) != prev:
+                    self.query_failed = True
+                    return Fill(order, px, 0, 0, 0, trade_date,
+                                'query_failed(previous execution cost unavailable)')
+                rec['booked_cost'] = sum(t['quantity'] * t['price'] for t in prior_fills)
+            prev_cost = float(rec.get('booked_cost', 0.0))
             delta_cost = total_cost - prev_cost
             if delta > 0 and delta_cost > 0:
                 incr_px = delta_cost / delta     # 增量段的实际均价
             else:
-                incr_px = px                      # 退化：首笔或成本差异常
+                self.query_failed = True
+                return Fill(order, px, 0, 0, 0, trade_date,
+                            'query_failed(inconsistent cumulative execution cost)')
             value = incr_px * delta
             commission, taxes = _est_fees(order.side, value)
             fill = Fill(order, incr_px, delta, commission, taxes, trade_date,
                         status_str, trade_id=f'{oid}#{int(traded)}')
             if ledger is not None:
                 booked, _dupes, _blocked = ledger.apply_fills([fill])
-                if not booked:
+                if _dupes:
+                    fill = Fill(order, incr_px, 0, 0, 0, trade_date,
+                                status_str + '(already booked)')
+                if not booked and not _dupes:
                     booking_ok = False
                     fill = Fill(order, incr_px, 0, 0, 0, trade_date,
                                 status_str + '(入账被阻，台账保留待复核)')
@@ -571,7 +770,7 @@ class QMTBroker(Broker):
         else:
             fill = Fill(order, px, 0, 0, 0, trade_date, status_str)
 
-        if booking_ok:
+        if booking_ok and not no_ledger_delta:
             # 入账成功（或无新增量）才推进台账与清退终态
             rec.update({'booked': int(traded), 'status': int(status),
                         'qty': int(qty), 'symbol': order.symbol,
@@ -589,6 +788,7 @@ class QMTBroker(Broker):
 
     # ---- 在途订单补记（崩溃/次日恢复；每次执行前调用） ----
 
+    @_serialized
     def sync_pending(self, ledger) -> List[Fill]:
         """同步在途订单成交到账本：查询台账所有未清退订单，补记新增成交量。
         trade_id=oid#累计量 → 幂等（回报重放/重复同步不重复入账）。
@@ -606,36 +806,44 @@ class QMTBroker(Broker):
             except ValueError:
                 submitted = today
             if (today - submitted).days > 3:
-                self._pending.pop(oid, None)
-                continue
-
-            status, traded, px = self._query_order(oid)
+                # 二轮复审#6：超期记录必须先查询再清退——此前按自然日直接
+                # 删除，四天前已成交的委托未经一次查询就消失（账本漏记）。
+                status, traded, px = self._query_order(oid)
+                if status == -1:
+                    rec['ttl_expired_unresolved'] = True
+                    self.query_failed = True
+                    logger.error(f"[QMT] sync_pending 超期且查询失败 {oid}："
+                                 "转入待对账（不清退，人工/账实核对处理）")
+                    continue
+            else:
+                status, traded, px = self._query_order(oid)
             if status == -1:
                 # 查询接口异常：无法确认旧订单状态——阻断新委托直到恢复
                 self.query_failed = True
                 logger.error(f"[QMT] sync_pending 查询失败 {oid}：无法确认在途订单状态，"
                              "阻断新委托（防止在未知旧订单上叠加重复委托）")
                 continue
-            delta = int(traded) - int(rec.get('booked', 0))
-            if delta > 0 and px > 0:
-                value = px * delta
-                commission, taxes = _est_fees(rec['side'], value)
-                fill = Fill(Order(rec['symbol'], rec['side'], 0.0), px, delta,
-                            commission, taxes, today, 'filled(在途补记)',
-                            trade_id=f'{oid}#{int(traded)}')
-                booked, _dupes, _blocked = ledger.apply_fills([fill])
-                if booked:
-                    booked_fills.extend(booked)
-                    rec['booked'] = int(traded)   # 入账成功才推进（R4 原子性）
-                # 入账被阻：booked 不推进，记录保留待下次同步/人工复核
-            rec['status'] = int(status)
-            if status in (QMTOrderState.FILLED, QMTOrderState.CANCELLED,
-                          QMTOrderState.REJECTED) and \
+            # 二轮复审#6：跨日补记的成交日期用**提交日**（此前用恢复当天，
+            # 成交日期被系统性后移）
+            trade_day = today
+            if (submitted != today and traded > rec.get('booked', 0)
+                    and not hasattr(self._xt_trader, 'query_stock_trades')):
+                self.query_failed = True
+                continue
+            fill = self._book_order_fill(
+                Order(rec['symbol'], rec['side'], 0.0), oid, status,
+                traded, px, px, rec['qty'], trade_day, ledger=ledger)
+            if fill.status.startswith('query_failed'):
+                self.query_failed = True
+            if fill.quantity > 0:
+                booked_fills.append(fill)
+            if not fill.status.startswith('query_failed') and status == QMTOrderState.CANCELLED and \
                     int(rec.get('booked', 0)) >= int(traded):
                 self._pending.pop(oid, None)
         self._save_state()
         if booked_fills:
             logger.info(f"[QMT] 在途订单补记 {len(booked_fills)} 笔")
+        self.query_failed = bool(self._pending)
         return booked_fills
 
     # ---- 台账持久化 ----
@@ -660,12 +868,13 @@ class QMTBroker(Broker):
         = 在途订单全部遗忘 = 重复下单/成交丢失（评审阻断项#5，R4）。
         """
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(self.state_path)), exist_ok=True)
-            tmp = self.state_path + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(self._pending, f, ensure_ascii=False, indent=1)
-            os.replace(tmp, self.state_path)
+            with self._mutex, exclusive_file(self.state_path):
+                if self._load_state() != self._persisted:
+                    raise RuntimeError('Order state changed in another instance; reload first')
+                replace_json(self.state_path, self._pending)
+                self._persisted = copy.deepcopy(self._pending)
         except Exception as e:
+            self._pending = copy.deepcopy(self._persisted)
             # 实盘台账写入失败=丢失在途订单跟踪 → 重复下单风险，必须阻断
             logger.error(f"[QMT] 在途台账保存失败（实盘安全风险）: {e}")
             raise RuntimeError(f"QMT在途台账持久化失败，阻断执行以防止重复下单: {e}")
@@ -675,7 +884,7 @@ class QMTBroker(Broker):
         self._ensure_connected()
         try:
             result = self._xt_trader.cancel_order_stock_async(self._account, order_id)
-            return result == 0
+            return type(result) is int and result >= 0
         except Exception as e:
             logger.error(f"[QMT] 撤单失败: {e}")
             return False
@@ -692,17 +901,18 @@ class QMTBroker(Broker):
                 f"必须人工核查券商App: {e}")
         if orders is None:
             raise RuntimeError("QMT订单查询返回None——数据不可用，人工核查")
-        if orders:
-            for o in orders:
-                if o.order_status in (QMTOrderState.PENDING, QMTOrderState.SUBMITTED,
-                                      QMTOrderState.PARTIAL):
-                    try:
-                        if self.cancel_order(o.order_id):
-                            count += 1
-                    except Exception as e:
-                        logger.critical(f"[QMT] 撤单失败 {o.order_id}: {e}"
-                                        f"——此订单可能仍在券商侧！")
-        return count
+        terminal = {QMTOrderState.CANCELLED, QMTOrderState.FILLED, QMTOrderState.REJECTED, 53}
+        active = {o.order_id for o in orders if o.order_status not in terminal}
+        for oid in active:
+            self.cancel_order(oid)
+        if not active:
+            return 0
+        observed = self._xt_trader.query_stock_orders(self._account)
+        if observed is None:
+            raise RuntimeError('Unable to verify cancellation')
+        confirmed = {o.order_id for o in observed if o.order_status in terminal}
+        return len(active - confirmed) + sum(
+            o.order_id not in active and o.order_status not in terminal for o in observed)
 
     # ==================== xtquant 回调（单参签名，register_callback(self) 注入） ====================
 
@@ -711,6 +921,7 @@ class QMTBroker(Broker):
         self._connected = False
         logger.warning("[QMT] 连接断开")
 
+    @_serialized
     def on_stock_order(self, order):
         """委托回报：order_remark(客户端引用) → 真实订单号 映射落账。
 
@@ -728,18 +939,16 @@ class QMTBroker(Broker):
             remark = str(getattr(order, 'order_remark', '') or '')
             rec = self._pending.get(remark)
             if rec is not None:
+                if rec.get('oid') and str(rec['oid']) != oid:
+                    raise ValueError('Conflicting broker order identity')
                 if rec.get('oid') != oid:
                     rec['oid'] = oid
                     self._save_state()
                     logger.info(f"[QMT] 订单映射 {remark} → {oid}")
                 return
-            # 兼容路径：无 remark（旧台账/外部单）——仅对尚无 oid 的同标的记录
-            for key, r in self._pending.items():
-                if r.get('oid') is None and r.get('symbol') == getattr(order, 'stock_code', ''):
-                    r['oid'] = oid
-                    self._save_state()
-                    logger.warning(f"[QMT] 无remark退化匹配 {key} → {oid}（按symbol）")
-                    return
+            if remark:
+                return
+            # Legacy references with no matching broker remark require manual reconciliation.
         except Exception as e:
             logger.error(f"[QMT] on_stock_order 回调处理失败: {e}")
 
@@ -750,6 +959,7 @@ class QMTBroker(Broker):
                     f"数量={getattr(trade, 'traded_volume', '?')} "
                     f"订单={getattr(trade, 'order_id', '?')}")
 
+    @_serialized
     def on_order_error(self, order_error):
         """订单错误回调：标记对应台账记录，交由 sync_pending/人工复核。
 

@@ -100,7 +100,7 @@ class TestFactorContracts:
         """PIT杠杆值是百分比（中位数~50），不是资产/权益倍数（~2）"""
         c = FACTOR_CONTRACTS['leverage']
         assert c.unit == 'pct'
-        assert c.expected_range[1] > 100  # 百分比值域应>100
+        assert c.expected_range == (0, 100)  # Debt/assets percentage points.
 
     def test_roe_is_ratio(self):
         """ROE是比率（0.08=8%），不是百分比（8=8%）"""

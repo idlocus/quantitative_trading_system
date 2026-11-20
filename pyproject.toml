@@ -1,10 +1,10 @@
 [project]
 name = "quantitative-trading-system"
-version = "0.1.0"
-description = "量化交易系统 - 唯一主链（生产/重放/实盘同源）"
+version = "0.2.1"
+description = "策略独立的量化底座 - 数据保留、显式策略、离线回放"
 readme = "README.md"
-# 环境基线 3.14.7；数值结果随 pandas/numpy 版本波动（工件 _meta.deps 记录，
-# 见 docs/唯一主链架构.md §2.15），升级须先跑 release_gate 再改这里的 ==
+# Preserve the existing environment while resetting application architecture.
+# Dependency upgrades require passing the active infrastructure tests first.
 requires-python = ">=3.14"
 license = {text = "MIT"}
 authors = [
@@ -23,7 +23,7 @@ dependencies = [
     "oracledb==26.0.1",       # Wind Oracle DB（thin 模式免装客户端）
     # --- 组合优化 / 研究 ---
     "cvxpy==1.9.3",           # portfolio/optimizer.py
-    "scikit-learn==1.9.1",    # research/ml_model.py
+    "scikit-learn==1.9.1",    # Retained for reproducible archived research.
     # --- Web / 运维 ---
     "Flask==3.1.3",
     "waitress==3.0.2",        # webapp serving（默认监听 127.0.0.1）
@@ -32,6 +32,7 @@ dependencies = [
     "PyYAML==6.0.3",
     "requests==2.34.2",
     "matplotlib==3.11.2",
+    "baostock>=0.9.4",
 ]
 
 [dependency-groups]
@@ -54,6 +55,7 @@ line_length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+norecursedirs = ["archive", ".venv", "data_cache", "runtime", "results", "ai-created"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v"

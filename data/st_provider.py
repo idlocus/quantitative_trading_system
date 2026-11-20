@@ -36,7 +36,8 @@ class STProvider:
         self._rows = self._load(ds) if ds is not None else []
         # [(sym, entry: date|None, remove: date|None)]，仅 ST_TYPES
         self._spans: List[Tuple[str, Optional[date], Optional[date]]] = [
-            (sym, _to_date(e), _to_date(r)) for sym, _t, e, r in self._rows]
+            (sym, _to_date(e), _to_date(r)) for sym, t, e, r in self._rows
+            if t in ST_TYPES]
 
     @classmethod
     def from_rows(cls, rows: List[Tuple[str, str, str, str]]):

@@ -197,8 +197,8 @@ FACTOR_CONTRACTS = {
     'bp': FactorContract('bp', 'ratio', (-0.5, 5.0), 0.30),
     'sp': FactorContract('sp', 'ratio', (0.0, 20.0), 0.30),
     'size': FactorContract('size', 'yuan', (1e7, 1e12), 0.30),  # 市值(元)
-    'leverage': FactorContract('leverage', 'pct', (0, 500), 0.20),  # D/E百分比
-    'roe': FactorContract('roe', 'ratio', (-0.5, 1.0), 0.20),   # ROE比率
+    'leverage': FactorContract('leverage', 'pct', (0, 100), 0.30),  # Debt/assets percentage points.
+    'roe': FactorContract('roe', 'ratio', (-0.5, 1.0), 0.30),   # ROE ratio.
     'momentum': FactorContract('momentum', 'ratio', (-1.0, 3.0), 0.30),  # N月收益
 }
 

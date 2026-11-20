@@ -19,11 +19,13 @@ import os
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
 
 from utils.logger import get_logger
+from utils.state_file import exclusive_file
 
 logger = get_logger(__name__)
 
@@ -49,11 +51,8 @@ class LayeredDataSource:
     """三层数据源（实现 preload_batch/list_symbols/get_kline，兼容 DataLoader）"""
 
     def __init__(self, cache_dir: str = 'data_cache'):
-        try:
-            from dotenv import load_dotenv
-            load_dotenv()
-        except ImportError:
-            pass
+        # 2026-11-04 收敛：不再隐式 load_dotenv()——凭据由需要联网层的
+        # 调用方显式注入（.env 读取仅限授权的 Oracle 受限键路径）
         self.cache_dir = Path(cache_dir)
         self.kline_dir = self.cache_dir / 'kline'
         self.fund_dir = self.cache_dir / 'fundamental'
@@ -101,6 +100,12 @@ class LayeredDataSource:
                 results[sym] = df
             if gaps:
                 missing[sym] = gaps
+        expected = self.get_kline_calendar(symbols, start, end)
+        if expected is not None:
+            for sym, df in results.items():
+                absent = expected.difference(df['date'])
+                if len(absent):
+                    missing.setdefault(sym, []).append((absent.min().date(), absent.max().date()))
         self.stats['cache_rows'] += sum(len(df) for df in results.values())
         logger.info(f"[layered] ① 缓存命中 {len(results)}/{len(symbols)} 只，缺口 {len(missing)} 只")
 
@@ -128,7 +133,7 @@ class LayeredDataSource:
             for sym, df in fetched.items():
                 results[sym] = self._merge_kline(results.get(sym), df)
                 self.stats['db_rows'] += len(df)
-            missing = {s: g for s, g in self._missing_after(results, symbols, start, end).items() if g}
+            missing = {s: g for s, g in self._missing_after(results, symbols, start, end, expected).items() if g}
             logger.info(f"[layered] ② DB 补齐后仍缺 {len(missing)} 只")
 
         # ③ WindPy 客户端（仅差额，省配额）
@@ -267,7 +272,7 @@ class LayeredDataSource:
         merged = pd.concat([b, a]).drop_duplicates(subset='date').sort_values('date')  # 新在前（评审#8）
         return LayeredDataSource._complete_rows(merged).reset_index(drop=True)
 
-    def _missing_after(self, results, symbols, start, end) -> Dict[str, List[tuple]]:
+    def _missing_after(self, results, symbols, start, end, expected=None) -> Dict[str, List[tuple]]:
         """按请求符号清单重算缺口（DB整批失败时符号不在results，也必须保留缺口供③客户端兜底）"""
         gaps_map = {}
         for sym in symbols:
@@ -276,10 +281,14 @@ class LayeredDataSource:
                 gaps_map[sym] = [(start, end)]
                 continue
             gaps = []
+            if expected is not None:
+                absent = expected.difference(df['date'])
+                if len(absent):
+                    gaps.append((absent.min().date(), absent.max().date()))
             first, last = df['date'].iloc[0], df['date'].iloc[-1]
             if first > pd.Timestamp(start):
                 gaps.append((start, (first - pd.Timedelta(days=1)).date()))
-            if last < pd.Timestamp(end - timedelta(days=5)):
+            if last < pd.Timestamp(end):
                 # 尾部缺口超过5个自然日才视为真缺（容忍 DB 同步滞后）
                 gaps.append(((last + pd.Timedelta(days=1)).date(), end))
             if gaps:
@@ -385,18 +394,25 @@ class LayeredDataSource:
                 cached = pd.DataFrame()
 
         need_db = field in DB_FIELD_MAP
-        matrices = []
-        if not cached.empty:
-            matrices.append(cached)
-
-        # 计算矩阵缺口（首末日期）
+        # Check both time coverage and the requested symbol universe.
+        calendar = self.get_kline_calendar(symbols, start, end)
+        if calendar is None:
+            # Possible sessions trigger source lookups only. Never fabricate holiday rows.
+            calendar = pd.bdate_range(start, end)
         def matrix_gaps(mx):
             if mx.empty:
+                return (start, end)
+            if any(sym not in mx.columns for sym in symbols):
+                return (start, end)
+            requested = mx.loc[(mx.index >= pd.Timestamp(start)) &
+                               (mx.index <= pd.Timestamp(end)), symbols]
+            if (requested.empty or requested.isna().any().any()
+                    or (calendar is not None and len(calendar.difference(requested.index)))):
                 return (start, end)
             gaps = []
             if mx.index.min() > pd.Timestamp(start):
                 gaps.append((start, (mx.index.min() - pd.Timedelta(days=1)).date()))
-            if mx.index.max() < pd.Timestamp(end - timedelta(days=5)):
+            if mx.index.max() < pd.Timestamp(end):
                 gaps.append(((mx.index.max() + pd.Timedelta(days=1)).date(), end))
             return gaps or None
 
@@ -406,16 +422,53 @@ class LayeredDataSource:
 
         if gaps and need_db and self._db_src():
             db_part = self._db_fundamental_bulk(field, symbols, start, end)
-        if gaps and db_part.empty and gaps:
-            # DB 无该列或失败 → 客户端补差额
+        missing_symbols = [sym for sym in symbols if sym not in db_part.columns or
+                           db_part[sym].isna().all()]
+        if gaps:
+            # 审计 2026-11-19 四-b：部分日期缺失的证券也要补——此前只补
+            # "整列缺失"的证券，列内缺口（DB 缺日/停牌段）永远填不上。
+            # 判定：请求区间内（以 DB 与缓存已知日期的并集为参照）DB 与
+            # 缓存同时缺值的证券交给客户端补数。
+            span_idx = pd.DatetimeIndex(calendar)
+            for frame in (db_part, cached):
+                if not frame.empty:
+                    span_idx = span_idx.union(frame.index)
+            span_idx = span_idx[(span_idx >= pd.Timestamp(start)) &
+                                (span_idx <= pd.Timestamp(end))]
+            if len(span_idx):
+                for sym in symbols:
+                    if sym in missing_symbols:
+                        continue
+                    db_col = db_part[sym].reindex(span_idx)
+                    if sym in cached.columns and not cached.empty:
+                        both_nan = db_col.isna() & cached[sym].reindex(span_idx).isna()
+                    else:
+                        both_nan = db_col.isna()
+                    if bool(both_nan.any()):
+                        missing_symbols.append(sym)
+        if gaps and missing_symbols:
+            # DB 无该列/列内缺口 → 客户端补差额
             gs = min(g[0] for g in gaps) if isinstance(gaps, list) else gaps[0]
             from data.wind import WindDataSource  # noqa: F401
-            client_matrix = self._client_src_matrix(field, symbols, gs, end)
+            client_matrix = self._client_src_matrix(field, missing_symbols, gs, end)
             client_part = client_matrix
 
-        merged = self._merge_matrices([m for m in (cached, db_part, client_part) if not m.empty])
-        if not merged.empty:
-            merged.to_parquet(path)
+        merged = cached
+        fetched = [frame for frame in (db_part, client_part) if not frame.empty]
+        if fetched:
+            with exclusive_file(path):
+                # Re-read after fetching so disjoint concurrent updates survive.
+                try:
+                    fetched.append(pd.read_parquet(path))
+                except FileNotFoundError:
+                    pass
+                merged = self._merge_matrices(fetched)
+                temporary = path.with_name(f'.{path.name}.{uuid4().hex}.tmp')
+                try:
+                    merged.to_parquet(temporary)
+                    os.replace(temporary, path)
+                finally:
+                    temporary.unlink(missing_ok=True)
         stats_line = (f"[layered] 字段 {field}: 缓存{len(cached)}行 DB{len(db_part)}行 "
                       f"客户端{len(client_part)}行 → 合并{len(merged)}行")
         logger.info(stats_line)
@@ -425,6 +478,7 @@ class LayeredDataSource:
         # 只返回请求区间
         if not merged.empty:
             merged = merged.loc[(merged.index >= pd.Timestamp(start)) & (merged.index <= pd.Timestamp(end))]
+            merged = merged.reindex(columns=symbols)
         return merged
 
     def _client_src_matrix(self, field, symbols, start, end):
@@ -510,18 +564,38 @@ class LayeredDataSource:
         return self.list_symbols(as_of=trade_date)
 
     def get_kline_calendar(self, symbols, start: date, end: date):
-        """从本地缓存取交易日历（优先指数，其次个股）"""
-        for sym in list(symbols) + ['000300.SH']:
+        """交易日历：优先**指数**缓存；否则用全部可得缓存的日期并集。
+
+        审计 2026-11-19 四-c：此前按"第一个有缓存的证券"取日历（且顺序
+        是先个股后指数，与注释相反）——首只证券停牌/晚上市时，它缺的
+        日期会被整个因子矩阵删掉。指数（000300.SH）只在交易所开市日出
+        bar，是权威日历；无指数缓存时退化为并集口径，个别证券的缺失
+        不再污染公共日历。"""
+        reference = self.cache_dir / 'preparation/wind/calendar_SSE.parquet'
+        sidecar = reference.with_suffix('.json')
+        if reference.exists() and sidecar.exists():
+            from data.wind_preparation import cached_response
+            request = json.loads(sidecar.read_text(encoding='utf8'))['request']
+            if (request.get('start', '9999') <= str(start) and request.get('end', '') >= str(end)
+                    and cached_response(reference, request)):
+                days = pd.DatetimeIndex(pd.read_parquet(reference, columns=['date'])['date'])
+                return days[(days >= pd.Timestamp(start)) & (days <= pd.Timestamp(end))].unique().sort_values()
+        union = None
+        for sym in ['000300.SH'] + list(symbols):
             path = self._kline_path(sym)
-            if path.exists():
-                try:
-                    df = pd.read_parquet(path)
-                    sel = df[(df['date'] >= pd.Timestamp(start)) & (df['date'] <= pd.Timestamp(end))]
-                    if not sel.empty:
-                        return pd.DatetimeIndex(sel['date'])
-                except Exception:
+            if not path.exists():
+                continue
+            try:
+                df = pd.read_parquet(path, columns=['date'])
+                sel = df[(df['date'] >= pd.Timestamp(start)) &
+                         (df['date'] <= pd.Timestamp(end))]
+                if sel.empty:
                     continue
-        return None
+                idx = pd.DatetimeIndex(sel['date'])
+                union = idx if union is None else union.union(idx)
+            except Exception:
+                continue
+        return union.unique().sort_values() if union is not None else None
 
     def get_index_members(self, index_code: str, as_of: Optional[date] = None) -> List[str]:
         """PIT 指数成分（AINDEXMEMBERS：入场/剔除日期判定）"""

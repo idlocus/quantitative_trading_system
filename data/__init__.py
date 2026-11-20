@@ -1,44 +1,25 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-数据模块
+"""Data providers and local cache access, imported only when requested."""
+from importlib import import_module
 
-数据源实现：
-- WindDataSource:    IKline, IQuote, ISymbol (Wind Terminal API)
-- AKShareDataSource: IKline, IQuote, ISymbol (akshare HTTP)
-- WindDBDataSource:  IKline, IQuote, ISymbol, IIndustry (Wind Oracle DB)
+_EXPORTS = {
+    'IKlineProvider': ('data.base.interfaces', 'IKlineProvider'),
+    'IQuoteProvider': ('data.base.interfaces', 'IQuoteProvider'),
+    'ISymbolProvider': ('data.base.interfaces', 'ISymbolProvider'),
+    'IIndustryProvider': ('data.base.interfaces', 'IIndustryProvider'),
+    # DataLoader/CachedDataSource 随旧研究管道归档（2026-11-04 清理，
+    # 快照在 archive/2026-10-30-before-reset/source/data/base/data_loader.py）
+    'WindDataSource': ('data.wind', 'WindDataSource'),
+    'AKShareDataSource': ('data.akshare', 'AKShareDataSource'),
+    'WindDBDataSource': ('data.wind_db', 'WindDBDataSource'),
+    'IndustryDataSource': ('data.wind_db', 'WindDBDataSource'),
+}
+__all__ = list(_EXPORTS)
 
-使用 data.base 导入抽象层：
-    from data.base import DataLoader, CachedDataSource, IKlineProvider, ...
-"""
 
-from data.base import (
-    IKlineProvider,
-    IQuoteProvider,
-    ISymbolProvider,
-    IIndustryProvider,
-    DataLoader,
-    CachedDataSource,
-)
-from data.wind import WindDataSource
-from data.akshare import AKShareDataSource
-from data.wind_db import WindDBDataSource
-
-# 向后兼容别名
-from data.wind_db import WindDBDataSource as IndustryDataSource
-
-__all__ = [
-    # 接口
-    "IKlineProvider",
-    "IQuoteProvider",
-    "ISymbolProvider",
-    "IIndustryProvider",
-    # 加载器
-    "DataLoader",
-    "CachedDataSource",
-    # 实现
-    "WindDataSource",
-    "AKShareDataSource",
-    "WindDBDataSource",
-    "IndustryDataSource",
-]
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(name)
+    module, member = _EXPORTS[name]
+    value = getattr(import_module(module), member)
+    globals()[name] = value
+    return value

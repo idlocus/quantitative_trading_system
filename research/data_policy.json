@@ -1,0 +1,12 @@
+{
+  "hk_universe_mode": "current_connect_snapshot",
+  "historical_connect_membership_required": false,
+  "scope": "research_only",
+  "user_confirmed_on": "2026-11-03",
+  "assumption": "Use the frozen current Stock Connect ordinary-share snapshot throughout historical research, bounded by listing and delisting dates.",
+  "limitations": [
+    "Current-survivor selection can bias historical results upward.",
+    "Historical additions, removals and sell-only restrictions are not reconstructed.",
+    "This assumption does not establish executable liquidity or live eligibility."
+  ]
+}

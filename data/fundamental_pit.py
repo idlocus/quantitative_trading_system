@@ -95,8 +95,19 @@ def build_pit_matrix(ann: pd.DataFrame, index: pd.DatetimeIndex,
             continue
         g = g[g['ts'] >= start_ts - pd.Timedelta(days=800)]  # 保留2年回看
         g = g.sort_values('ts')
+        # 审计 2026-11-19 四-c：迟发更正（旧报告期晚于新报告期公告）不得
+        # 覆盖已公布的更新报告期——每个决策日先取"最新可见报告期"，再取
+        # 该报告期的最新修订。同报告期的后公告=修订，自然胜出。
+        kept = []
+        max_period = ''
+        for row_ts, row_rp, row_val in zip(g['ts'], g['report_period'], g['value']):
+            if row_rp >= max_period:
+                kept.append((row_ts, row_val))
+                max_period = row_rp
+        if not kept:
+            continue
         # 公告日序列 → 步进函数（reindex 到日历，前向填充，公告当日生效）
-        s = g.set_index('ts')['value']
+        s = pd.Series({ts: val for ts, val in kept})
         s = s[~s.index.duplicated(keep='last')]
         aligned = s.reindex(index, method='ffill')
         # 公告日早于区间起点且之后无新公告 → reindex ffill 已覆盖；
@@ -115,7 +126,7 @@ class PITFinancialProvider:
     def __init__(self, layered_source):
         self._layered = layered_source
         self._cache: Dict[str, pd.DataFrame] = {}
-        self._ann_cache: Dict[str, pd.DataFrame] = {}
+        self._ann_cache: Dict[tuple, pd.DataFrame] = {}
 
     def get_factor_matrix(self, factor_name: str, symbols: List[str],
                           start: date, end: date) -> pd.DataFrame:
@@ -124,7 +135,7 @@ class PITFinancialProvider:
             raise ValueError(f"未知财务因子 '{factor_name}'. 可用: {list(PIT_FINANCIAL_FACTORS)}")
         field, _, _ = PIT_FINANCIAL_FACTORS[factor_name]
 
-        key = f"{field}_{start}_{end}_{len(symbols)}"
+        key = (field, start, end, tuple(symbols))
         if key not in self._ann_cache:
             db = self._layered._db_src()
             if not db:
@@ -140,8 +151,15 @@ class PITFinancialProvider:
         ann = self._ann_cache[key]
         if ann.empty:
             return pd.DataFrame()
-        calendar = self._layered.get_kline_calendar(symbols[:1], start, end)
+        # 审计 2026-11-19 四-c：日历取**全部证券**（并集口径，指数优先）——
+        # 此前只传首只证券，首只停牌/晚上市时它缺的日期会被整个因子矩阵删除
+        calendar = self._layered.get_kline_calendar(symbols, start, end)
         if calendar is None or len(calendar) < 10:
-            # 回退：按工作日构造
+            # 回退：按工作日构造（可能包含休市日——无任何缓存时的最后手段，
+            # 结果需注明该 caveat）
             calendar = pd.bdate_range(start, end)
-        return build_pit_matrix(ann, pd.DatetimeIndex(calendar), symbols)
+        matrix = build_pit_matrix(ann, pd.DatetimeIndex(calendar), symbols)
+        # Wind stores ROE in percentage points; consumers use a ratio.
+        if factor_name == 'roe':
+            matrix = matrix / 100.0
+        return matrix

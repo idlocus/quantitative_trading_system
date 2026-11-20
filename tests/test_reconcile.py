@@ -13,7 +13,8 @@ from live.ledger import Ledger
 from live.reconcile import (BrokerStatement, Reconciler, ReconReport,
                             load_statement, write_statement_template,
                             DIFF_CASH, DIFF_POSITION, DIFF_TRADE_MISSING_LEDGER,
-                            DIFF_TRADE_MISSING_BROKER, DIFF_TRADE_DUP, DIFF_FEE)
+                            DIFF_TRADE_MISSING_BROKER, DIFF_TRADE_DUP, DIFF_FEE,
+                            DIFF_COST_BASIS, DIFF_ID_CONFLICT)
 
 AS_OF = '2026-10-12'
 
@@ -26,8 +27,9 @@ def fill(sym, side, qty, price, commission=30.0, taxes=5.0, status='filled',
 
 
 def stmt(cash=100000.0, positions=None, trades=None):
+    # trades=None = 未提供流水（跳过成交核对）；[]=已确认零笔
     return BrokerStatement(as_of=AS_OF, cash=cash,
-                           positions=positions or {}, trades=trades or [])
+                           positions=positions or {}, trades=trades)
 
 
 class TestLedgerDedup:
@@ -301,3 +303,124 @@ class TestQmtFixHardBlock:
         rep = rec.reconcile(led, s)
         actions = rec.apply_adjustments(led, s, rep)
         assert any('补记' in a for a in actions), "manual --fix 应正常补记"
+
+
+class TestFixDoesNotFabricatePositions:
+    """审计 2026-11-19 三-1：修正算法曾把已入账的补记成交再计一次依据
+    （explained = 入账后持仓 + 已入账数量），空账本+券商150股+可核实买入
+    100股会被"修正"成150股——50股没有任何成交依据。"""
+
+    def test_verified_buy_not_double_counted(self, tmp_path):
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(10_000)
+        s = stmt(cash=9_000, positions={'A': 150},
+                 trades=[{'date': AS_OF, 'symbol': 'A', 'side': 'BUY',
+                          'price': 10.0, 'quantity': 100, 'commission': 0,
+                          'taxes': 0, 'trade_id': 'Q1'}])
+        rec = Reconciler()
+        rep = rec.reconcile(led, s)
+        rec.apply_adjustments(led, s, rep)
+        # 只能入账可核实的100股；剩余50股成本未知，不得凭空补成150
+        assert led.positions.get('A') == 100
+        assert any(d.kind == DIFF_COST_BASIS for d in rep.diffs)
+
+    def test_verified_sell_evidence_derives_target(self, tmp_path):
+        """修正前持仓100股、券商40股、流水可核实卖出60股：可核实=40，
+        与券商一致 → 不产生成本未知差异，正常对齐。"""
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(10_000)
+        led.apply_fills([fill('A', 'BUY', 100, 10.0, commission=0, taxes=0,
+                              d='2026-10-10')])
+        s = BrokerStatement(as_of=AS_OF, cash=led.cash + 600.0,
+                            positions={'A': 40},
+                            trades=[{'date': AS_OF, 'symbol': 'A',
+                                     'side': 'SELL', 'price': 10.0,
+                                     'quantity': 60, 'commission': 0,
+                                     'taxes': 0, 'trade_id': 'Q1'}])
+        rec = Reconciler()
+        rep = rec.reconcile(led, s)
+        rec.apply_adjustments(led, s, rep)
+        assert led.positions.get('A') == 40
+        assert not any(d.kind == DIFF_COST_BASIS for d in rep.diffs)
+
+
+class TestStatementValidation:
+    """审计 2026-11-19 三-2：NaN 现金/价格、非法方向、非法日期、非整数
+    持仓曾通过对账校验——NaN 与任何比较均为 False，直接判"一致"。"""
+
+    def _d(self, **over):
+        d = {'as_of': AS_OF, 'cash': 100.0, 'positions': {}}
+        d.update(over)
+        return d
+
+    def test_nan_cash_rejected(self):
+        with pytest.raises(ValueError, match='现金'):
+            BrokerStatement.from_dict(self._d(cash=float('nan')))
+
+    def test_nan_trade_price_rejected(self):
+        with pytest.raises(ValueError, match='价格'):
+            BrokerStatement.from_dict(self._d(
+                trades=[{'date': AS_OF, 'symbol': 'A', 'side': 'BUY',
+                         'price': float('nan'), 'quantity': 100}]))
+
+    def test_unknown_side_rejected(self):
+        with pytest.raises(ValueError, match='方向'):
+            BrokerStatement.from_dict(self._d(
+                trades=[{'date': AS_OF, 'symbol': 'A', 'side': 'SWAP',
+                         'price': 10.0, 'quantity': 100}]))
+
+    def test_invalid_trade_date_rejected(self):
+        with pytest.raises(ValueError, match='日期'):
+            BrokerStatement.from_dict(self._d(
+                trades=[{'date': '昨天', 'symbol': 'A', 'side': 'BUY',
+                         'price': 10.0, 'quantity': 100}]))
+
+    def test_fractional_position_rejected(self):
+        with pytest.raises(ValueError, match='整数'):
+            BrokerStatement.from_dict(self._d(positions={'A': 10.5}))
+
+
+class TestSameIdElementChecks:
+    """审计 2026-11-19 三-2：成交 ID、数量、价格相同但证券与方向均不同
+    曾被判定"一致"——同一回报 ID 指鹿为马。"""
+
+    def test_same_id_conflicting_elements_flagged(self, tmp_path):
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(1_000_000)
+        led.apply_fills([fill('A', 'BUY', 1000, 10.0, trade_id='T9',
+                              commission=0, taxes=0)])
+        s = stmt(cash=led.cash, positions={'A': 1000},
+                 trades=[{'date': AS_OF, 'symbol': 'B', 'side': 'SELL',
+                          'price': 10.0, 'quantity': 1000, 'commission': 0,
+                          'taxes': 0, 'trade_id': 'T9'}])
+        rep = Reconciler().reconcile(led, s)
+        assert not rep.is_ok
+        assert any(d.kind == DIFF_ID_CONFLICT for d in rep.diffs)
+        assert rep.matched_trades == 0
+
+
+class TestTradesProvisionSemantics:
+    """审计 2026-11-19 三-2：未提供流水（None）与已确认零笔（[]）必须区分。"""
+
+    def test_not_provided_skips_trade_check(self, tmp_path):
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(1_000_000)
+        led.apply_fills([fill('A', 'BUY', 1000, 10.0, commission=0, taxes=0)])
+        s = BrokerStatement(as_of=AS_OF, cash=led.cash, positions={'A': 1000},
+                            trades=None)
+        rep = Reconciler().reconcile(led, s)
+        assert rep.is_ok, "未提供流水时跳过成交核对，不得判差异"
+
+    def test_confirmed_zero_trades_flags_ledger_side(self, tmp_path):
+        led = Ledger(str(tmp_path / 'l.json'))
+        led.initialize(1_000_000)
+        led.apply_fills([fill('A', 'BUY', 1000, 10.0, commission=0, taxes=0)])
+        s = BrokerStatement(as_of=AS_OF, cash=led.cash, positions={'A': 1000},
+                            trades=[])
+        rep = Reconciler().reconcile(led, s)
+        assert not rep.is_ok
+        assert any(d.kind == DIFF_TRADE_MISSING_BROKER for d in rep.diffs)
+
+    def test_template_loads_as_not_provided(self, tmp_path):
+        p = write_statement_template(str(tmp_path / 's.json'))
+        assert load_statement(p).trades is None

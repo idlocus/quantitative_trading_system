@@ -16,6 +16,9 @@ from live.risk_gate import RiskGate, GateConfig, RiskDecision, render_gate_markd
 
 def make_ledger(tmp_path, positions=None, costs=None, cash=100000.0, navs=None, trades=None):
     led = Ledger(str(tmp_path / 'l.json'))
+    if navs is None:
+        navs = [cash + sum(q * (costs or {}).get(s, 10.0)
+                           for s, q in (positions or {}).items())]
     led._d = {
         'cash': cash,
         'positions': positions or {},

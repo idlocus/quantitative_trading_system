@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 
 class OptimizerConfig:
-    max_weight: float = 0.03          # 单票上限（Top100组合默认3%）
+    max_weight: float = 0.03          # 单票权重上限（显式配置项，无隐含组合规模）
     risk_aversion: float = 8.0        # λ：风险厌恶
     turnover_penalty: float = 0.005   # τ：换手惩罚
     shrinkage: float = 0.10           # 协方差收缩系数（→对角）
@@ -61,14 +61,16 @@ def solve_weights(alpha: pd.Series,
         config: 优化参数
 
     Returns:
-        {symbol: 权重}（和为1；求解失败回退等权）
+        {symbol: 权重}。少于五只且无风格约束时可留现金，约束求解失败抛出异常。
     """
     cfg = config or OptimizerConfig()
     cands = [s for s in alpha.index if s in returns.columns]
     if not cands:
         return {}
+    if bench_style and style_exp is None:
+        raise ValueError('Style constraints require exposure data')
     n = len(cands)
-    if n < 5:
+    if n < 5 and not bench_style and cfg.min_weight == 0:
         w = min(1.0 / n, cfg.max_weight)
         return {s: w for s in cands}
 
@@ -89,7 +91,9 @@ def solve_weights(alpha: pd.Series,
     if style_exp is not None and bench_style:
         E = style_exp.reindex(cands)
         for f, anchor in bench_style.items():
-            if f in E.columns and E[f].notna().sum() >= n * 0.8:
+            if f not in E.columns or E[f].notna().sum() < n * 0.8:
+                raise ValueError(f'Insufficient style coverage: {f}')
+            else:
                 e = E[f].fillna(E[f].median()).values
                 cons.append(e @ w <= anchor + cfg.style_budget)
                 cons.append(e @ w >= anchor - cfg.style_budget)
@@ -101,18 +105,17 @@ def solve_weights(alpha: pd.Series,
         try:
             prob.solve(solver=cp.SCS)
         except Exception as e:
-            logger.warning(f"[optimizer] solve failed: {e}, fallback equal weight")
-            w_eq = min(1.0 / n, cfg.max_weight)
-            return {s: w_eq for s in cands}
+            raise ValueError('Optimizer could not solve the constrained portfolio') from e
 
     if w.value is None or prob.status not in ('optimal', 'optimal_inaccurate'):
-        logger.warning(f"[optimizer] status={prob.status}, fallback equal weight")
-        w_eq = min(1.0 / n, cfg.max_weight)
-        return {s: w_eq for s in cands}
+        raise ValueError(f'Portfolio constraints are infeasible: {prob.status}')
 
     weights = np.clip(w.value, 0, None)
     weights = weights / weights.sum()
     # 截尾再归一（数值稳定性）
     weights = np.minimum(weights, cfg.max_weight)
     weights = weights / weights.sum()
+    w.value = weights
+    if any(np.max(constraint.violation()) > 1e-4 for constraint in cons):
+        raise ValueError('Portfolio solution violates constraints')
     return {s: float(x) for s, x in zip(cands, weights)}

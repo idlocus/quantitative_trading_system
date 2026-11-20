@@ -11,6 +11,10 @@
 缓存：data_cache/corporate_actions.parquet（原子写）
 """
 import os
+import hashlib
+import json
+from datetime import date
+from utils.state_file import exclusive_file, replace_json
 from pathlib import Path
 
 import pandas as pd
@@ -22,16 +26,22 @@ CACHE = PROJECT / 'data_cache' / 'corporate_actions.parquet'
 def load_corporate_actions(ds, symbols=None, start='20160101', end=None,
                            use_cache=True) -> pd.DataFrame:
     """返回 [sym, ex_date, cash_ps, stk_ps]。symbols=None 时全市场。"""
-    end = end or '21000101'
-    if use_cache and CACHE.is_file():
-        df = pd.read_parquet(CACHE)
-        df['ex_date'] = pd.to_datetime(df['ex_date'])
-        m = (df['ex_date'] >= pd.to_datetime(start, format='%Y%m%d')) \
-            & (df['ex_date'] <= pd.to_datetime(end, format='%Y%m%d'))
-        df = df[m]
-        if symbols is not None:
-            df = df[df['sym'].isin(set(symbols))]
-        return df.reset_index(drop=True)
+    end = min(end or date.today().strftime('%Y%m%d'), date.today().strftime('%Y%m%d'))
+    coverage_path = CACHE.with_suffix('.coverage.json')
+    if use_cache:
+        with exclusive_file(CACHE):
+            coverage = json.loads(coverage_path.read_text(encoding='utf8')) if coverage_path.exists() else {}
+            if (CACHE.is_file() and coverage.get('start', '99999999') <= start
+                    and coverage.get('end', '') >= end):
+                with CACHE.open('rb') as stream:
+                    if hashlib.file_digest(stream, 'sha256').hexdigest() == coverage.get('sha256'):
+                        stream.seek(0)
+                        df = pd.read_parquet(stream)
+                        days = pd.to_datetime(df['ex_date'])
+                        df = df.loc[days.between(pd.Timestamp(start), pd.Timestamp(end))]
+                        if symbols is not None:
+                            df = df[df['sym'].isin(symbols)]
+                        return df.reset_index(drop=True)
 
     cur = ds._db_src()._cursor()
     cur.execute(
@@ -40,14 +50,19 @@ def load_corporate_actions(ds, symbols=None, start='20160101', end=None,
         "AND (CASH_DVD_PER_SH_AFTER_TAX>0 OR STK_DVD_PER_SH>0)",
         {'s': start, 'e': end})
     rows = cur.fetchall()
+    if hasattr(cur, 'close'):
+        cur.close()
     df = pd.DataFrame(rows, columns=['sym', 'ex_date', 'cash_ps', 'stk_ps'])
     df['ex_date'] = pd.to_datetime(df['ex_date'], format='%Y%m%d')
     for c in ('cash_ps', 'stk_ps'):
         df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
     full = df.copy()
-    tmp = str(CACHE) + '.tmp'
-    full.to_parquet(tmp)
-    os.replace(tmp, CACHE)
+    with exclusive_file(CACHE):
+        tmp = str(CACHE) + '.tmp'
+        full.to_parquet(tmp)
+        digest = hashlib.sha256(Path(tmp).read_bytes()).hexdigest()
+        os.replace(tmp, CACHE)
+        replace_json(coverage_path, dict(start=start, end=end, sha256=digest))
     if symbols is not None:
         df = df[df['sym'].isin(set(symbols))]
     return df.reset_index(drop=True)
@@ -58,5 +73,7 @@ def by_date_index(ca: pd.DataFrame) -> dict:
     out = {}
     for _, r in ca.iterrows():
         d = r['ex_date'].date()
-        out.setdefault(d, {})[r['sym']] = (float(r['cash_ps']), float(r['stk_ps']))
+        events = out.setdefault(d, {})
+        cash, stock = events.get(r['sym'], (0., 0.))
+        events[r['sym']] = cash + float(r['cash_ps']), stock + float(r['stk_ps'])
     return out

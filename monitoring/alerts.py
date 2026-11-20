@@ -36,18 +36,12 @@ COOLDOWN = {P0: 300, P1: 1800, P2: 3600}
 
 
 def load_webhook_config() -> Optional[str]:
-    """从 .env 或环境变量读取 webhook URL"""
-    url = os.getenv('ALERT_WEBHOOK_URL', '')
-    if not url:
-        # 尝试从 .env 读取
-        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
-        if os.path.isfile(env_path):
-            with open(env_path, encoding='utf-8') as f:
-                for line in f:
-                    if line.startswith('ALERT_WEBHOOK_URL='):
-                        url = line.split('=', 1)[1].strip()
-                        break
-    return url or None
+    """读取 webhook URL。
+
+    只从进程环境变量读取（2026-11-04 收敛：不再直接解析 .env——项目约定
+    .env 读取仅限已授权的 Oracle 连接参数；需要告警时由调用方显式
+    export ALERT_WEBHOOK_URL 或经由获授权的入口注入）"""
+    return os.getenv('ALERT_WEBHOOK_URL') or None
 
 
 def alert(code: str, level: str, message: str, **context):

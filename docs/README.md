@@ -1,44 +1,22 @@
-# 项目文档索引
+# 当前文档索引
 
-> 快速导航：按使用场景找文档，而非按文件名。
+| 文档 | 用途 |
+|---|---|
+| [项目入口](../README.md) | 当前状态、可用命令和代码分工 |
+| [SYSTEM.md](SYSTEM.md) | 无内置策略底座的架构与调用约定 |
+| [RESEARCH_MANDATE.md](RESEARCH_MANDATE.md) | 用户已确认的股票范围、月收益与双重 15% 风险目标 |
+| [MOMENTUM_RESEARCH_ARCHIVE_2026-11-10.md](MOMENTUM_RESEARCH_ARCHIVE_2026-11-10.md) | 强势股（动量族）研究完整档案：五层检验的全部因子与效果 |
+| [DAILY_STRATEGY_SPEC.md](DAILY_STRATEGY_SPEC.md) | **日持仓策略规范**：每日决策函数（买/卖/不动三规则+参数表+检验依据） |
+| [CTA_Z8_STRATEGY.md](CTA_Z8_STRATEGY.md) | **CTA Z8 策略规格**：波动率压缩×6品种，每日决策版（规则/品种/仓位/风险提示+每日报告脚本） |
+| [CTA_SIGNAL_LIBRARY.md](CTA_SIGNAL_LIBRARY.md) | CTA信号库：25个信号族设计（趋势/回归/OI/波动率/跨品种/季节性）|
+| [CTA_ALPHA_LANDSCAPE.md](CTA_ALPHA_LANDSCAPE.md) | CTA阿尔法全景：教科书vs机构差距、可用阿尔法源排序、行动优先级 |
+| [RESEARCH_LOG.md](RESEARCH_LOG.md) | **研究流水线总览（唯一入口）**：从规则→数据→信号→组合的完整时间线、每轮结论与证据文件导航 |
+| [DATA_READINESS_2026-11-02.md](DATA_READINESS_2026-11-02.md) | A 股/港股通本地库存证据、阻断项和补齐顺序 |
+| [DATA_YEARLY_PREPARATION_2026-11-03.md](DATA_YEARLY_PREPARATION_2026-11-03.md) | 年度行情检查、生命周期、补丁下载及暂存版本 |
+| [DATA_ORACLE_PREPARATION_2026-11-03.md](DATA_ORACLE_PREPARATION_2026-11-03.md) | Oracle 只读准备结果、新原始行情版本和港股通历史资格缺口 |
+| [RESET_2026-10-30.md](RESET_2026-10-30.md) | 归档范围、数据保留、验收与后续边界 |
+| [归档说明](../archive/2026-10-30-before-reset/README.md) | 旧策略、实验、文档及源码恢复 |
+| [数据字典](wind_db_schema.md) | 保留的 Wind 数据库结构参考 |
+| [上一轮修复记录](REVIEW_REPAIRS_2026-10-30.md) | 重构前 12 项修复的历史记录，不是当前策略定义 |
 
-## 你想做什么？
-
-| 场景 | 文档 | 说明 |
-|---|---|---|
-| 理解系统架构 | [唯一主链架构.md](唯一主链架构.md) | **主文档**：主链定义、历次修复、收益结论 |
-| 日常运行 | [SYSTEM.md](SYSTEM.md) | 系统总览、模块地图、CLI 命令 |
-| 了解风控 | [风险分层与执行闸门.md](风险分层与执行闸门.md) | L2/L3/L4 分层、闸门配置 |
-| 账实核对 | [账实核对机制.md](账实核对机制.md) | 对账流程、差异处理 |
-| 数据库结构 | [wind_db_schema.md](wind_db_schema.md) | Wind Oracle 表结构、单位归一化 |
-| 技术框架 | [TECHNICAL_FRAMEWORK.md](TECHNICAL_FRAMEWORK.md) | 技术选型、分层设计 |
-| 阶段成果 | [STAGE_REPORT.md](STAGE_REPORT.md) | 各阶段验收记录 |
-| 开发进度 | [PROGRESS_LOG.md](PROGRESS_LOG.md) | 开发日志 |
-
-## 当前系统状态（2026-10-13）
-
-- **Paper 全链路可用**：信号→闸门→撮合→账本→对账
-- **QMT 代码就绪**，等待券商环境验证（首次实盘清单见 qmt_broker.py docstring）
-- **策略收益结论**：可交易口径下因子增益≈0，策略无盈利证据（详见主链文档 §2.8）
-- **关键数据修复**：复权口径断裂已修复（close=不复权/adjclose=前复权双轨）
-
-## 主链代码地图
-
-```
-数据层  data/layered.py → data/wind.py → data/st_provider.py → data/turnover.py
-          ↓
-信号    live/signals.py (generate_production_signal — 唯一入口)
-          ↓
-订单    live/signals.py (build_orders — 缓冲带)
-          ↓
-风控    live/risk_gate.py (L2数据/L3熔断/L4止损)
-          ↓
-执行    live/broker.py (Paper) / live/qmt_broker.py (QMT)
-          ↓
-账本    live/ledger.py → live/reconcile.py (对账)
-```
-
-## 弃用代码（禁止主链引用）
-
-`backtesting/` + `strategy/` + `selection/` 是旧的个股止损型策略引擎（研究遗留），
-与生产因子链不共享语义。已加 DEPRECATED 标记，由 `tests/test_legacy_isolation.py` 隔离。
+当前默认策略列表为空。旧架构说明、研究裁决、收益数字和运行手册已移入归档，保留原文，不代表当前运行策略。

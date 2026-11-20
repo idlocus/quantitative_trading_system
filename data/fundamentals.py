@@ -37,12 +37,12 @@ class WindFundamentalProvider:
         Args:
             wind_data_source: WindDataSource 或 LayeredDataSource（三层取数时委托）
         """
-        if wind_data_source is not None:
-            self._wind = getattr(wind_data_source, '_wind', None) or wind_data_source
-        else:
+        if wind_data_source is None:
             from data.wind import WindDataSource
-            self._wind = WindDataSource()
-        self._cache: Dict[str, pd.DataFrame] = {}
+            wind_data_source = WindDataSource()
+        self._wind = (wind_data_source if hasattr(wind_data_source, 'get_field_matrix')
+                      else getattr(wind_data_source, '_wind', wind_data_source))
+        self._cache: Dict[tuple, pd.DataFrame] = {}
 
     def get_field_matrix(self, field: str, symbols: List[str],
                          start: date, end: date) -> pd.DataFrame:
@@ -56,11 +56,15 @@ class WindFundamentalProvider:
         if hasattr(self._wind, 'get_field_matrix'):
             return self._wind.get_field_matrix(field, symbols, start, end)
 
-        cache_key = f"{field}_{len(symbols)}_{symbols[0] if symbols else ''}_{symbols[-1] if symbols else ''}"
+        # 审计 2026-11-19 四-b：缓存键必须含**完整证券集合与日期范围**——
+        # 此前只有 field+数量+首尾代码：同首尾不同中间证券、或相同证券
+        # 不同年份，都会直接取回上一次的矩阵。
+        cache_key = (field, tuple(symbols), start, end)
         if cache_key in self._cache:
-            return self._cache[cache_key]
+            return self._cache[cache_key].copy()
 
         columns: Dict[str, pd.Series] = {}
+        failed_chunks = 0
         n_chunks = (len(symbols) + BATCH_CHUNK - 1) // BATCH_CHUNK
         for ci in range(n_chunks):
             chunk = symbols[ci * BATCH_CHUNK:(ci + 1) * BATCH_CHUNK]
@@ -71,6 +75,7 @@ class WindFundamentalProvider:
                 )
                 if r.ErrorCode != 0 or not r.Times:
                     logger.warning(f"fundamental wsd({field}) chunk {ci}: {r.ErrorCode}")
+                    failed_chunks += 1
                     continue
                 times = pd.DatetimeIndex(pd.to_datetime(pd.Series(list(r.Times))))
                 for code_idx, sym in enumerate(r.Codes):
@@ -85,11 +90,25 @@ class WindFundamentalProvider:
                     except Exception:
                         continue
             except Exception as e:
+                failed_chunks += 1
                 logger.warning(f"fundamental wsd({field}) chunk {ci} failed: {e}")
 
-        mx = pd.DataFrame(columns).sort_index()
+        mx = pd.DataFrame(columns).sort_index().replace([np.inf, -np.inf], np.nan)
         mx.index = pd.DatetimeIndex(mx.index).as_unit('ns')
-        self._cache[cache_key] = mx
+        if failed_chunks:
+            # 审计 2026-11-19 四-b：分批拉取有失败 → 结果残缺，不得缓存
+            # （下次同请求会重拉而非复用残缺矩阵）
+            logger.warning(f"fundamental wsd({field}): {failed_chunks}/{n_chunks} "
+                           f"批次失败，残缺结果不入缓存")
+            return mx
+        missing = [s for s in symbols if s not in mx.columns]
+        if missing:
+            logger.info(f"fundamental wsd({field}): {len(missing)} 只证券无数据列"
+                        f"（首例 {missing[0]}，属数据级缺失）")
+            return mx
+        if mx.empty or mx.isna().any().any():
+            return mx
+        self._cache[cache_key] = mx.copy()
         logger.info(f"fundamental field '{field}': {mx.shape[0]} 天 × {mx.shape[1]} 只")
         return mx
 

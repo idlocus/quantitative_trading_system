@@ -7,6 +7,8 @@ QMT 实盘实现见 live/qmt_broker.py（唯一 QMTBroker，勿在此另建占�
 执行器统一经 live.make_broker(mode) 构造：paper → PaperBroker，qmt → QMTBroker。
 """
 
+import math
+from numbers import Integral, Real
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
@@ -28,6 +30,15 @@ class Order:
     quantity: int = 0     # 股数（0 = 由 broker 按金额计算）
     amount: float = 0.0   # 金额（quantity=0 时使用）
     note: str = ''
+
+
+def valid_order(order: Order, price) -> bool:
+    return (order.side in ('BUY', 'SELL') and isinstance(order.symbol, str)
+            and bool(order.symbol.strip()) and isinstance(price, Real)
+            and math.isfinite(price) and price > 0
+            and isinstance(order.quantity, Integral) and order.quantity >= 0
+            and isinstance(order.amount, Real) and math.isfinite(order.amount)
+            and order.amount >= 0 and (order.quantity > 0 or order.amount > 0))
 
 
 @dataclass
@@ -90,8 +101,10 @@ class PaperBroker(Broker):
         """
         st_symbols: 当日 ST 股集合（主板 ST 涨跌幅 ±5%，见 trading/rules）；
                     不传则按非 ST 处理（数据不可用时的降级行为）。
-        positions:  当前持仓 {symbol: 数量}（卖出数量合法化需要：零股一次性规则）；
-                    不传则卖出数量按订单原样（回测/闸门全仓卖出场景恒合法）。
+        positions:  当前持仓 {symbol: 数量}。None=持仓未知（回测全仓卖出
+                    场景，卖出数量按订单原样不合法化）；传入字典（含空字典）
+                    = 已知持仓，卖单逐笔合法化、同批次逐笔扣减可卖数量，
+                    字典中不存在的品种视为持仓 0（不得凭空卖出）。
         """
         from datetime import datetime as _dt
         if isinstance(trade_date, date) and not isinstance(trade_date, _dt):
@@ -99,10 +112,15 @@ class PaperBroker(Broker):
         fills = []
         running_cash = available_cash  # 运行时现金追踪（None=不检查）
         st_symbols = st_symbols or set()
-        positions = positions or {}
+        # 审计 2026-11-19 三-6：positions=None（持仓未知，回测全仓卖出场景，
+        # 沿历史宽松口径不合法化）与 {}（已知空仓）语义必须区分——已知持仓
+        # 上下文时逐笔合法化并对同批次逐笔扣减可卖数量（第二笔卖出不得
+        # 复用第一笔已卖股数）。
+        positions_known = positions is not None
+        sellable = dict(positions) if positions_known else {}
         for o in orders:
             raw = prices.get(o.symbol)
-            if raw is None or raw <= 0:
+            if not valid_order(o, raw) or (running_cash is not None and not math.isfinite(running_cash)):
                 fills.append(Fill(o, 0, 0, 0, 0, trade_date, status='rejected'))
                 continue
             # 涨跌停拒单（主链共享规则：板块比例+ST差异化，回测同实现）
@@ -120,15 +138,22 @@ class PaperBroker(Broker):
             px = round_tick(o.symbol, px)   # 价格档位 0.01
             qty = o.quantity
             if qty <= 0 and o.amount > 0:
-                fee_rate = self.commission + self.transfer_fee + \
-                    (self.stamp_tax if o.side == 'SELL' else 0)
-                qty = int(o.amount / (px * (1 + fee_rate)))
+                if o.side == 'SELL':
+                    # 卖出申报不得被费用除价缩量（审计 2026-11-19 三-6：
+                    # 100股@10 的清仓卖出按含费价折成99股，再被整手规则拒绝
+                    # = 清仓失败挂仓）。费用从成交所得中扣除。
+                    qty = int(o.amount / px)
+                else:
+                    fee_rate = self.commission + self.transfer_fee
+                    qty = int(o.amount / (px * (1 + fee_rate)))
             if o.side == 'BUY':
                 # 申报数量：主板/创业板100整手；科创板≥200且1股递增；北交所≥100且1股递增
                 qty = round_buy_qty(o.symbol, qty, lot=self._lot(o.symbol))
-            elif positions:
-                # 卖出合法化（含零股一次性：全仓申报恒合法）
-                qty = round_sell_qty(o.symbol, qty, positions.get(o.symbol, qty),
+            elif positions_known:
+                # 卖出合法化（含零股一次性：全仓申报恒合法）。
+                # 已知持仓上下文里不存在的品种 = 持仓为 0，不得凭空卖出。
+                holding = sellable.get(o.symbol, 0)
+                qty = round_sell_qty(o.symbol, qty, holding,
                                      lot=self._lot(o.symbol))
             if qty <= 0:
                 fills.append(Fill(o, px, 0, 0, 0, trade_date, status='rejected(不足最低申报)'))
@@ -161,4 +186,7 @@ class PaperBroker(Broker):
                     running_cash += value - commission - taxes
 
             fills.append(Fill(o, px, qty, commission, taxes, trade_date))
+            # 同批次逐笔扣减可卖数量：后续同品种卖单只能卖余量
+            if o.side == 'SELL' and positions_known and qty > 0:
+                sellable[o.symbol] = max(0, sellable.get(o.symbol, 0) - qty)
         return fills

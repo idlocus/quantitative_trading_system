@@ -98,29 +98,49 @@ class TrialRegistry:
         self._data = self._load()
 
     def _load(self) -> dict:
-        if os.path.isfile(self.path):
-            try:
-                with open(self.path, encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {'trials': [], 'count': 0}
+        try:
+            with open(self.path, encoding='utf-8') as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return {'trials': [], 'count': 0}
+        except (OSError, ValueError) as e:
+            raise RuntimeError(f"实验登记册损坏或不可读，拒绝写入 {self.path}: {e}") from e
+        if not isinstance(data, dict) or not isinstance(data.get('trials'), list):
+            raise RuntimeError('实验登记册结构非法（缺 trials 列表），拒绝写入')
+        if type(data.get('count')) is not int or data['count'] != len(data['trials']):
+            raise RuntimeError('实验登记册计数与明细不一致，拒绝写入')
+        return data
 
     def record(self, label: str, sharpe: float = None, total_return: float = None,
-               extra: dict = None) -> int:
-        """登记一次策略尝试，返回累计尝试次数"""
-        entry = {'label': label}
+               extra: dict = None, *, release_sha256: str | None = None) -> int:
+        """登记一次策略尝试，返回累计尝试次数。
+
+        统一登记入口（审计 2026-11-19 四-a）：label=研究标识，
+        extra 携带 verdict/证据位置等；写入为事务式追加（临时文件 +
+        原子替换），半写不产生损坏登记册。"""
+        from datetime import datetime
+        entry = {'label': label,
+                 'ran_at': datetime.now().isoformat(timespec='seconds')}
         if sharpe is not None:
             entry['sharpe'] = round(float(sharpe), 3)
         if total_return is not None:
             entry['total_return'] = round(float(total_return), 4)
         if extra:
             entry.update(extra)
-        self._data['trials'].append(entry)
-        self._data['count'] = len(self._data['trials'])
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        with open(self.path, 'w', encoding='utf-8') as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=1)
+        from utils.state_file import exclusive_file, replace_json
+        with exclusive_file(self.path):
+            data = self._load()
+            if data['count'] < self._data['count']:
+                raise RuntimeError('实验登记册计数低于本实例已读记录，拒绝写入')
+            if release_sha256 is not None:
+                if any(row.get('release_sha256') == release_sha256 for row in data['trials']):
+                    self._data = data
+                    return data['count']
+                entry['release_sha256'] = release_sha256
+            data['trials'].append(entry)
+            data['count'] = len(data['trials'])
+            replace_json(self.path, data)
+            self._data = data
         return self._data['count']
 
     @property

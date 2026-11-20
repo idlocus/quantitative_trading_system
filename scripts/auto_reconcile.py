@@ -8,25 +8,40 @@
   python scripts/auto_reconcile.py --manual live/statements/2026-10-14.json
 """
 import json
+from dataclasses import asdict
 import os
 import sys
-from datetime import date
+import zlib
+from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dotenv import load_dotenv
-load_dotenv()
+# 2026-11-04 收敛：移除模块级全量 load_dotenv()（.env 读取仅限授权的
+# Oracle 连接参数，且只允许经由 data/oracle_preparation 的受限键读取）。
+# 本脚本所需环境变量由调用方显式提供。
+
+RAW_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'runtime', 'reconciliation')
 
 
-def save_raw_snapshot(stmt_data: dict):
-    """保存原始券商回报（审计用）"""
-    raw_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        'runtime', 'reconciliation')
-    os.makedirs(raw_dir, exist_ok=True)
-    path = os.path.join(raw_dir, f"{stmt_data.get('as_of', date.today())}.json")
+def save_raw_snapshot(stmt_data: dict) -> str:
+    """保存原始券商回报（审计用）。
+
+    审计 2026-11-19 三-8：①日期严格解析——外部提供的 as_of 不再直接
+    进文件名/路径；②同日多次对账不再互相覆盖：文件名含微秒时间+内容
+    摘要，快照路径写进对账记录，事后可追溯每次修正依据的原始单据。"""
+    as_of = stmt_data.get('as_of')
+    try:
+        d = date.fromisoformat(str(as_of)[:10])
+    except (TypeError, ValueError):
+        raise ValueError(f"对账快照 as_of 非法，拒绝保存: {as_of!r}") from None
+    os.makedirs(RAW_DIR, exist_ok=True)
+    payload = json.dumps(stmt_data, ensure_ascii=False, sort_keys=True, indent=1)
+    digest = f"{datetime.now():%H%M%S%f}_{zlib.crc32(payload.encode('utf-8')):08x}"
+    path = os.path.join(RAW_DIR, f"{d.isoformat()}_{digest}.json")
     with open(path, 'w', encoding='utf-8') as f:
-        json.dump(stmt_data, f, ensure_ascii=False, indent=1)
+        f.write(payload)
     return path
 
 
@@ -53,9 +68,9 @@ def run_reconciliation(ledger, stmt_data: dict) -> dict:
         'diffs': [{'kind': d.kind, 'detail': d.detail} for d in rep.diffs],
     }
 
-    # 写入 last_recon
+    # 写入 last_recon（含快照标识，审计 2026-11-19 三-8）
     ledger.record_recon(stmt.as_of, rep.is_ok, len(rep.diffs),
-                        source=stmt.source, fixed=False)
+                        source=stmt.source, fixed=False, snapshot=raw_path)
 
     # 告警
     if not rep.is_ok:
@@ -98,15 +113,17 @@ def main():
             rep = rec.reconcile(ledger, stmt)
             actions = rec.apply_adjustments(ledger, stmt, rep)
             print(f"    修正: {'; '.join(actions) if actions else '无需修正'}")
-        return
+            result['ok'] = rec.reconcile(ledger, stmt).is_ok
+        return 0 if result['ok'] else 2
 
     # QMT 自动对账
     print("尝试QMT自动对账...")
+    broker = None
     try:
         from live import QMTBroker
         broker = QMTBroker()
         broker.connect()
-        stmt_data = broker.fetch_statement()
+        stmt_data = asdict(broker.fetch_statement())
         stmt_data['source'] = 'qmt'
         result = run_reconciliation(ledger, stmt_data)
         print(f"    来源: qmt (confidence: high)")
@@ -118,15 +135,16 @@ def main():
             # 在ID匹配验证前，QMT来源的自动修正一律禁止。
             print("⛔ QMT对账的 --fix 已禁用（成交ID映射未验证，重复补记风险）")
             print("   差异请人工核对后手动修正，或等B8（ID规范化）修复后启用")
-            return
-            print(f"    修正: {'; '.join(actions) if actions else '无需修正'}")
-        broker.disconnect()
-
+            return 2
+        return 0 if result['ok'] else 2
     except Exception as e:
         print(f"[!] QMT对账失败: {e}")
         print("    使用手工方式: python scripts/auto_reconcile.py --manual live/statements/今日.json")
         sys.exit(1)
+    finally:
+        if broker is not None:
+            broker.disconnect()
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from live.broker import Order
+from live.broker import Order, Fill
 from live.ledger import Ledger
 from live.qmt_broker import QMTBroker, QMTOrderState
 
@@ -44,7 +44,8 @@ class FakeQMT(QMTBroker):
         return oid
 
     def _query_order(self, order_id):
-        return self._orders.get(order_id, (49, 0, 0.0))
+        # 与真实语义一致：查无此单 = 不可确认（-1），而非默认在途
+        return self._orders.get(order_id, (-1, -1, 0.0))
 
     def _cancel_order(self, order_id):
         self._cancel_calls.append(order_id)
@@ -81,7 +82,7 @@ class TestPartialFillLifecycle:
         ledger._d['positions']['600000.SH'] = 600
         ledger._d['cost']['600000.SH'] = 10.0
         broker._pending['ORD0001'] = {'symbol': '600000.SH', 'side': 'BUY',
-                                      'qty': 1000, 'booked': 600,
+                                      'qty': 1000, 'booked': 600, 'booked_cost': 6000,
                                       'status': 50,
                                       'submitted_at': str(datetime.now())}
         broker._orders['ORD0001'] = (QMTOrderState.PARTIAL, 1000, 10.0)
@@ -100,14 +101,14 @@ class TestPartialFillLifecycle:
         ledger._d['positions']['600000.SH'] = 600
         ledger._d['cost']['600000.SH'] = 10.0
         broker._pending['ORD0001'] = {'symbol': '600000.SH', 'side': 'BUY',
-                                      'qty': 1000, 'booked': 600, 'status': 50,
+                                      'qty': 1000, 'booked': 600, 'booked_cost': 6000, 'status': 50,
                                       'submitted_at': str(datetime.now())}
         broker._orders['ORD0001'] = (QMTOrderState.FILLED, 1000, 10.0)
         broker.sync_pending(ledger)                             # 补400 → 1000
         # 模拟回报重放：手工把 booked 回退再同步（同一累计量）
         broker._pending['ORD0001'] = dict(broker._pending.get('ORD0001') or
                                           {'symbol': '600000.SH', 'side': 'BUY',
-                                           'qty': 1000, 'booked': 600, 'status': 50,
+                                           'qty': 1000, 'booked': 600, 'booked_cost': 6000, 'status': 50,
                                            'submitted_at': str(datetime.now())})
         broker._pending['ORD0001']['booked'] = 600
         broker._pending['ORD0001']['status'] = 50
@@ -120,7 +121,7 @@ class TestPartialFillLifecycle:
         state = str(tmp_path / 'orders.json')
         b1 = FakeQMT(state)
         b1._pending['ORD0007'] = {'symbol': '600000.SH', 'side': 'SELL',
-                                  'qty': 500, 'booked': 300, 'status': 50,
+                                  'qty': 500, 'booked': 300, 'booked_cost': 3000, 'status': 50,
                                   'submitted_at': str(datetime.now())}
         b1._save_state()
         del b1
@@ -140,6 +141,9 @@ class TestPartialFillLifecycle:
         """撤单瞬间的成交残量：CANCELLED 不立即清退，sync_pending 复核后清"""
         state = str(tmp_path / 'orders.json')
         broker = FakeQMT(state)
+        ledger.apply_fills([Fill(Order('600000.SH', 'BUY', 0.0),
+                                  10.0, 600, 0.0, 0.0, date.today(),
+                                  trade_id='ORD0001#600')])
         # 执行时撤单后查询显示 CANCELLED@600 → booked 600，台账保留（复核机制）
         broker._pending['ORD0001'] = {'symbol': '600000.SH', 'side': 'BUY',
                                       'qty': 1000, 'booked': 600,
@@ -152,14 +156,26 @@ class TestPartialFillLifecycle:
         assert 'ORD0001' not in broker._pending                # 复核后清退
 
     def test_ttl_prunes_zombie_records(self, tmp_path, ledger):
+        """二轮复审#6：超期记录先查询再处置——券商已查不到（-1）时转入
+        待对账（保留+阻断），不得静默删除；明确终态且无残量才清退。"""
         state = str(tmp_path / 'orders.json')
         broker = FakeQMT(state)
         broker._pending['OLD0001'] = {'symbol': '600000.SH', 'side': 'BUY',
                                       'qty': 100, 'booked': 0, 'status': 49,
                                       'submitted_at': str(date.today() - timedelta(days=5))}
-        broker._orders['OLD0001'] = (49, 0, 0.0)               # 券商已查不到
+        # 券商查无此单（真实语义 -1）→ 保留待对账 + 阻断
         broker.sync_pending(ledger)
-        assert 'OLD0001' not in broker._pending
+        assert 'OLD0001' in broker._pending, '查询失败的超期单不得静默删除'
+        assert broker._pending['OLD0001'].get('ttl_expired_unresolved') is True
+        assert broker.query_failed
+        # 明确终态（撤单、零成交）→ 正常清退
+        broker2 = FakeQMT(state + '2')
+        broker2._pending['OLD0002'] = {'symbol': '600000.SH', 'side': 'BUY',
+                                       'qty': 100, 'booked': 0, 'status': 49,
+                                       'submitted_at': str(date.today() - timedelta(days=5))}
+        broker2._orders['OLD0002'] = (QMTOrderState.CANCELLED, 0, 0.0)
+        broker2.sync_pending(ledger)
+        assert 'OLD0002' not in broker2._pending
 
     def test_full_fill_booked_immediately(self, tmp_path, ledger):
         broker = FakeQMT(str(tmp_path / 'orders.json'),
@@ -172,16 +188,137 @@ class TestPartialFillLifecycle:
         assert ledger.positions['600000.SH'] == 1000
 
 
-class TestWiring:
+class TestSubmitOrderingAndBatchStop:
+    """审计 2026-11-19 三-4：①下单意图先持久化再提交（消除 ack 与落盘
+    之间退出的丢单窗口）；②超时撤单后仍在途/非终态部分成交 → 停止本批
+    后续委托，不得复用被前单占用的预算。"""
 
-    def test_sync_pending_called_before_signal(self):
-        """源码守护：qmt 执行流必须先补账本再生成信号（风控/订单基于最新持仓）"""
-        import inspect
-        import run_daily
-        src = inspect.getsource(run_daily.run_pm)
-        assert 'sync_pending(ledger)' in src
-        assert src.index('sync_pending(ledger)') < src.index('generate_production_signal(ds')
-        import run_live
-        src2 = inspect.getsource(run_live.main)
-        assert 'sync_pending(ledger)' in src2
-        assert src2.index('sync_pending(ledger)') < src2.index('generate_production_signal(ds')
+    def test_intent_persisted_before_broker_submit(self, tmp_path, monkeypatch):
+        broker = QMTBroker(state_path=str(tmp_path / 'q.json'),
+                           enforce_window=False)
+        events = []
+
+        class FakeXt:
+            def order_stock_async(self, account, symbol, direction, qty,
+                                  price_type, price_val, strategy, remark):
+                events.append(('submit', remark))
+                return 7
+
+        broker._xt_trader = FakeXt()
+        real_save = broker._save_state
+
+        def save_spy():
+            events.append(('save', sorted(broker._pending.keys())))
+            real_save()
+
+        monkeypatch.setattr(broker, '_save_state', save_spy)
+        ref = broker._submit_order(Order('600000.SH', 'BUY', 0), 100, 10.0)
+        assert ref is not None
+        # 第一次 save 必须先于 submit，且下单意图已在台账中
+        assert events[0][0] == 'save' and ref in events[0][1]
+        assert events[1] == ('submit', ref)
+        assert broker._pending[ref]['seq'] == 7
+
+    def test_crash_after_submit_leaves_recoverable_intent(self, tmp_path, monkeypatch):
+        """提交成功后、最终落盘前退出：意图记录仍在（磁盘首存为 submitting）"""
+        broker = QMTBroker(state_path=str(tmp_path / 'q.json'),
+                           enforce_window=False)
+        calls = {'n': 0}
+
+        class FakeXt:
+            def order_stock_async(self, *a):
+                return 7
+
+        broker._xt_trader = FakeXt()
+
+        def save_crash():
+            calls['n'] += 1
+            if calls['n'] >= 2:
+                raise OSError('crash between submit and final save')
+
+        monkeypatch.setattr(broker, '_save_state', save_crash)
+        with pytest.raises(OSError):
+            broker._submit_order(Order('600000.SH', 'BUY', 0), 100, 10.0)
+        assert len(broker._pending) == 1
+        rec = next(iter(broker._pending.values()))
+        assert rec['symbol'] == '600000.SH' and rec['booked'] == 0
+
+    def test_nonterminal_after_timeout_stops_batch(self, tmp_path, monkeypatch):
+        broker = QMTBroker(state_path=str(tmp_path / 'q.json'), enforce_window=False)
+        submitted = []
+        monkeypatch.setattr(broker, '_ensure_connected', lambda: None)
+
+        def execute_single(order, prices, trade_date, cash, **kw):
+            submitted.append(order.symbol)
+            return Fill(order, 10, 0, 0, 0, trade_date,
+                        status=f'open({QMTOrderState.SUBMITTED})')
+
+        monkeypatch.setattr(broker, '_execute_single', execute_single)
+        fills = broker.execute(
+            [Order('A', 'BUY', .01, amount=100), Order('B', 'BUY', .01, amount=100)],
+            {'A': 10, 'B': 10}, date.today(), available_cash=1000)
+        assert submitted == ['A'], "前单未确认终态，后续订单必须停止"
+        assert broker.query_failed
+        assert fills[-1].status.startswith('rejected')
+
+    def test_nonterminal_partial_marked_open(self, tmp_path):
+        """非终态部分成交必须标 open(...)，不得伪装成终态 partial(n/m)"""
+        broker = QMTBroker(state_path=str(tmp_path / 'q.json'), enforce_window=False)
+        broker._pending['ref'] = {'symbol': 'A', 'side': 'BUY', 'qty': 100,
+                                  'booked': 0, 'submitted_at': str(datetime.now())}
+        fill = broker._book_order_fill(
+            Order('A', 'BUY', 0), 'ref', QMTOrderState.SUBMITTED, 50, 10.0,
+            10.0, 100, date.today(), ledger=None)
+        assert fill.status.startswith('open')
+        assert '50/100' in fill.status
+        assert fill.quantity == 50
+
+    def test_terminal_partial_keeps_partial_status(self, tmp_path):
+        """撤单后的终态部分成交仍是 partial(n/m)（历史口径不变）"""
+        broker = QMTBroker(state_path=str(tmp_path / 'q.json'), enforce_window=False)
+        broker._pending['ref'] = {'symbol': 'A', 'side': 'BUY', 'qty': 100,
+                                  'booked': 0, 'submitted_at': str(datetime.now())}
+        fill = broker._book_order_fill(
+            Order('A', 'BUY', 0), 'ref', QMTOrderState.CANCELLED, 50, 10.0,
+            10.0, 100, date.today(), ledger=None)
+        assert fill.status == 'partial(50/100)'
+
+
+class TestRoundTwoQmtGuards:
+    """二轮复审 #4/#5/#7：非法方向不进券商、回执丢失保留意图、矛盾回报
+    不得当终态。"""
+
+    def test_invalid_side_never_reaches_broker(self, tmp_path):
+        broker = QMTBroker(state_path=str(tmp_path / 'q.json'), enforce_window=False)
+        submitted = []
+        monkey = type('M', (), {})()
+        broker._ensure_connected = lambda: None
+        broker._submit_order = lambda order, qty, price: submitted.append(order.side) or 'REF'
+        broker._await_order = lambda oid, timeout=None, cancel_on_timeout=True: (
+            QMTOrderState.FILLED, 0, 0.0)
+        fills = broker.execute([Order('A', 'TYPO', .01, quantity=100)],
+                               {'A': 10.0}, AS_OF, available_cash=10_000)
+        assert submitted == [], '非法方向必须在券商调用前被拒'
+        assert fills[0].status.startswith('rejected(invalid side)')
+
+    def test_submit_timeout_keeps_intent(self, tmp_path):
+        broker = QMTBroker(state_path=str(tmp_path / 'q.json'), enforce_window=False)
+
+        class TimeoutXt:
+            def order_stock_async(self, *a):
+                raise TimeoutError('broker ack lost')
+
+        broker._xt_trader = TimeoutXt()
+        ref = broker._submit_order(Order('A', 'BUY', 0), 100, 10.0)
+        assert ref is not None, '回执丢失≠拒绝：意图必须保留'
+        assert broker._pending[ref]['status'] == 'unknown'
+
+    def test_contradictory_filled_zero_traded_blocked(self, tmp_path):
+        broker = QMTBroker(state_path=str(tmp_path / 'q.json'), enforce_window=False)
+        broker._pending['ref'] = {'symbol': 'A', 'side': 'BUY', 'qty': 100,
+                                  'booked': 0, 'submitted_at': str(datetime.now())}
+        fill = broker._book_order_fill(
+            Order('A', 'BUY', 0), 'ref', QMTOrderState.FILLED, 0, 0.0,
+            10.0, 100, date.today(), ledger=None)
+        assert fill.status.startswith('query_failed(contradictory')
+        assert broker.query_failed and 'ref' in broker._pending
