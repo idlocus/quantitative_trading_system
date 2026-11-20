@@ -23,6 +23,17 @@ env/
 logs/
 results/
 ai-created/
+!/results/
+/results/*
+!/results/data/
+/results/data/*
+!/results/data/trial_registry.json
+!/ai-created/
+/ai-created/*
+!/ai-created/research/
+/ai-created/research/*
+!/ai-created/research/g1_holdout_pool_v3/
+!/ai-created/research/holdout_pool_v3/
 .pytest_cache/
 *.db
 .env

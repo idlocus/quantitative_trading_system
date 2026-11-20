@@ -1,0 +1,10 @@
+{
+  "source_sha256": "a68a2566847a9dd52c8582b2898b39fd24f7618103ab5cdba804510530a12b70",
+  "quality": {
+    "events": 17034,
+    "identical_rows_deduplicated": 0,
+    "same_day_distributions_merged": 23,
+    "ambiguous_events": 0,
+    "unknown_record_dates": 0
+  }
+}

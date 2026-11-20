@@ -1,0 +1,47 @@
+{
+  "study": "final_holdout",
+  "start": "2023-06-01",
+  "train_end": "2023-12-31",
+  "validation_end": "2026-10-30",
+  "holdout_start": "2024-01-01",
+  "signals": [
+    "HOLDOUT_P3",
+    "HOLDOUT_V3",
+    "D16_benchmark"
+  ],
+  "initial_paper_capital": 1000000,
+  "capital_is_user_account_value": false,
+  "positions": 50,
+  "gross_target": 0.95,
+  "rebalance_sessions": 21,
+  "one_way_cost_scenarios": [
+    0.0025
+  ],
+  "zero_cost_is_diagnostic_only": true,
+  "costs_are_actual_broker_schedule": false,
+  "cash_dividend_haircut": 0.2,
+  "haircut_is_statutory_tax_model": false,
+  "volume_participation_cap": 0.01,
+  "risk_variants": [
+    "budget_guard"
+  ],
+  "monthly_loss_limit": 0.15,
+  "peak_drawdown_limit": 0.15,
+  "exposure_budget_adverse_shock": 0.25,
+  "risk_limit_interpretation": "fixed percentage limits confirmed 2026-11-03",
+  "minimum_history_sessions": 120,
+  "liquidity_window": 20,
+  "minimum_median_daily_amount_local_currency": 20000000,
+  "horizon_sessions": 5,
+  "hac_lags": 5,
+  "minimum_cross_section": 30,
+  "exclude_a_st_types": [
+    "S",
+    "X",
+    "Y",
+    "P"
+  ],
+  "revision": "phase2 composite: N=50 monthly, S1-S4 vs D16 benchmark",
+  "dynamic_parameters_sha256": "6839183eddfe77944e0805e5ca4f8c2a53cbefd700f0fe0aa5265887dc28b252",
+  "one_way_cost": 0.0025
+}

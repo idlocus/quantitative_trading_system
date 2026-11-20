@@ -1,0 +1,4 @@
+# Preserve the exact bytes used by the holdout release checksums.
+/ai-created/research/g1_holdout_pool_v3/** -text
+/ai-created/research/holdout_pool_v3/** -text
+/results/data/trial_registry.json -text

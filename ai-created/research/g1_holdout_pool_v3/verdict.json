@@ -1,0 +1,20 @@
+{
+  "monthly": 0.005170865933642688,
+  "max_dd": -0.07151234787900407,
+  "worst_month": -0.03346415445870454,
+  "worst_mtd": -0.0355982367541694,
+  "months": 34,
+  "holdout_initial_nav": 988724.1124999996,
+  "turnover_double": 0.3893002365389113,
+  "trades_before_holdout": 154,
+  "trades_in_holdout": 7013,
+  "trades_buy": 3670,
+  "trades_sell": 3343,
+  "buy_amount": 7225822.0,
+  "sell_amount": 7398390.8,
+  "exposure": 0.5113593615013223,
+  "critical": 0,
+  "PASSED": true,
+  "lifetime_drawdown_in_holdout": -0.0715123478790038,
+  "correction_note": "2026-11-19 审计更正：月度基准=上年最后净值、月数=自然月、换手=金额口径双边（原 4.39x 为笔数口径，不可比）。更正算法见 ai-created/2026-11-19-review-fixes/recompute_g1_metrics.py（已对保存净值复算验收）。"
+}

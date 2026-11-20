@@ -1,0 +1,38 @@
+{
+  "HOLDOUT_P3_budget_guard_25bps": {
+    "monthly": 0.0047117495160307055,
+    "max_dd": -0.07249215065046866,
+    "worst_month": -0.03276180453341038,
+    "worst_mtd": -0.03318361114141566,
+    "months": 34,
+    "holdout_initial_nav": 987564.7499999997,
+    "opening_or_closing_breach": false,
+    "lifetime_drawdown_in_holdout": -0.0724921506504688,
+    "accounting_valid": true,
+    "PASSED": true
+  },
+  "HOLDOUT_V3_budget_guard_25bps": {
+    "monthly": 0.003122273754231575,
+    "max_dd": -0.07872269891173256,
+    "worst_month": -0.031606670849453344,
+    "worst_mtd": -0.03642476260926131,
+    "months": 34,
+    "holdout_initial_nav": 991547.8024999996,
+    "opening_or_closing_breach": false,
+    "lifetime_drawdown_in_holdout": -0.0787226989117325,
+    "accounting_valid": true,
+    "PASSED": true
+  },
+  "D16_benchmark_budget_guard_25bps": {
+    "monthly": 0.0031625996574564663,
+    "max_dd": -0.0822275997530083,
+    "worst_month": -0.03101195950096103,
+    "worst_mtd": -0.03101195950096103,
+    "months": 34,
+    "holdout_initial_nav": 988224.4231750004,
+    "opening_or_closing_breach": false,
+    "lifetime_drawdown_in_holdout": -0.0822275997530083,
+    "accounting_valid": false,
+    "PASSED": false
+  }
+}
