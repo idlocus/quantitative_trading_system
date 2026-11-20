@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}系统体检 - Quant Strategy System{% endblock %}
+{% block header %}系统体检{% endblock %}
+{% block actions %}<a href="/system?refresh=1" class="btn btn-primary">重新检查</a>{% endblock %}
+{% block content %}
+
+<!-- Overall Status Banner -->
+{% if issues|length > 0 %}
+<div class="card" style="border-color:var(--red); margin-bottom:20px">
+    <h3 style="color:var(--red)">⚠ 发现 {{ issues|length }} 个问题</h3>
+    <ul style="margin:10px 20px; line-height:2; color:var(--red)">
+        {% for issue in issues %}
+        <li>{{ issue }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% else %}
+<div class="card" style="border-color:var(--green); margin-bottom:20px">
+    <h3 style="color:var(--green)">✓ 全部检查通过</h3>
+</div>
+{% endif %}
+
+<!-- Workspace Status -->
+<div class="card" style="margin-bottom:20px">
+    <h3>系统状态</h3>
+    <table>
+        <tr><th>检查项</th><th>状态</th><th>说明</th></tr>
+        <tr>
+            <td>运行模式</td>
+            <td><span class="pill flat">{{ workspace.mode }}</span></td>
+            <td class="c-dim">{% if workspace.mode == 'unconfigured' %}无内置策略状态（正常）{% endif %}</td>
+        </tr>
+        <tr>
+            <td>活跃策略</td>
+            <td>{{ workspace.active_strategies|length }} 个</td>
+            <td class="c-dim">{{ '无内置策略（正常）' if workspace.active_strategies|length == 0 else workspace.active_strategies|join(', ') }}</td>
+        </tr>
+        <tr>
+            <td>自动交易</td>
+            <td>{% if workspace.automatic_trading %}<span class="pill sell">开启</span>{% else %}<span class="pill flat">关闭</span>{% endif %}</td>
+            <td class="c-dim">{{ '✓ 安全（自动交易未启用）' if not workspace.automatic_trading else '⚠ 自动交易已启用' }}</td>
+        </tr>
+        <tr>
+            <td>实盘执行</td>
+            <td>{% if workspace.live_execution %}<span class="pill sell">开启</span>{% else %}<span class="pill flat">关闭</span>{% endif %}</td>
+            <td class="c-dim">{{ '✓ 安全（无实盘执行）' if not workspace.live_execution else '⚠ 实盘执行已启用' }}</td>
+        </tr>
+        <tr>
+            <td>数据缓存</td>
+            <td>{% if workspace.cache_exists %}<span class="pill buy">存在</span>{% else %}<span class="pill sell">缺失</span>{% endif %}</td>
+            <td class="c-dim">{{ '本地数据缓存可用' if workspace.cache_exists else '⚠ 数据缓存不存在' }}</td>
+        </tr>
+        <tr>
+            <td>归档备份</td>
+            <td>{% if workspace.archive_exists %}<span class="pill buy">存在</span>{ else %}<span class="pill sell">缺失</span>{% endif %}</td>
+            <td class="c-dim">{{ '旧系统归档可用' if workspace.archive_exists else '⚠ 归档不存在' }}</td>
+        </tr>
+    </table>
+</div>
+
+<!-- Archive Verification -->
+{% if archive %}
+<div class="card" style="margin-bottom:20px">
+    <h3>归档完整性校验</h3>
+    <table>
+        <tr><th>检查项</th><th>结果</th><th>详情</th></tr>
+        <tr>
+            <td>源码快照（304文件）</td>
+            <td>{% if archive.source_verified %}<span class="pill buy">✓ 通过</span>{% else %}<span class="pill sell">✗ 失败</span>{% endif %}</td>
+            <td class="c-dim">SHA256 校验 {{ archive.source_files }} 个文件</td>
+        </tr>
+        <tr>
+            <td>受保护数据（12,377文件）</td>
+            <td>{% if archive.retained_files_unchanged %}<span class="pill buy">✓ 未变更</span>{% else %}<span class="pill sell">✗ 有变更</span>{% endif %}</td>
+            <td class="c-dim">{{ archive.retained_files }} 个文件存在性+大小检查</td>
+        </tr>
+        {% if archive.source_failures %}
+        <tr><td colspan="3" style="color:var(--red)">失败文件: {{ archive.source_failures|join(', ') }}</td></tr>
+        {% endif %}
+        {% if archive.retained_file_changes %}
+        <tr><td colspan="3" style="color:var(--red)">变更文件: {{ archive.retained_file_changes|join(', ') }}</td></tr>
+        {% endif %}
+    </table>
+</div>
+{% endif %}
+
+<!-- Data Cache Summary -->
+{% if data_summary %}
+<div class="card" style="margin-bottom:20px">
+    <h3>数据缓存概览</h3>
+    <div class="grid" style="grid-template-columns:repeat(3,1fr); margin-bottom:15px">
+        <div class="metric">
+            <div class="label">总文件数</div>
+            <div class="val">{{ "{:,}".format(data_summary.files) }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">总大小</div>
+            <div class="val">{{ data_summary.size_human }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">分类数</div>
+            <div class="val">{{ data_summary.categories|length }}</div>
+        </div>
+    </div>
+    <table>
+        <tr><th>分类</th><th>文件数</th><th>大小</th></tr>
+        {% for cat, info in data_summary.categories.items() %}
+        <tr>
+            <td>{{ cat }}</td>
+            <td>{{ info.files }}</td>
+            <td>{{ info.size_human }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+{% endif %}
+
+<!-- Environment Info -->
+<div class="card">
+    <h3>环境信息</h3>
+    <table>
+        <tr><th>项目</th><th>值</th></tr>
+        <tr><td>Python 版本</td><td>{{ env.python_version }}</td></tr>
+        <tr><td>关键依赖</td><td>{{ env.deps }}</td></tr>
+        <tr><td>最近检查时间</td><td>{{ env.check_time }}</td></tr>
+    </table>
+</div>
+
+{% endblock %}

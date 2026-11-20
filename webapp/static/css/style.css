@@ -1,0 +1,106 @@
+/* Quant Strategy System - Unified Design (中国金融配色：红涨绿跌) */
+* { margin:0; padding:0; box-sizing:border-box; font-family:'SF Pro','Segoe UI','Microsoft YaHei',sans-serif; }
+:root {
+    --bg:#0d1117; --bg-card:#161b22; --bg-hover:#1c2128;
+    --border:#30363d; --text:#e6edf3; --text-dim:#8b949e;
+    --accent:#58a6ff; --yellow:#d29922; --purple:#bc8cff;
+    --up:#ef4444;    /* 涨/收益 = 红色 */
+    --down:#22c55e;  /* 跌/亏损 = 绿色 */
+}
+body { background:var(--bg); color:var(--text); }
+
+/* Layout */
+.app { display:flex; min-height:100vh; }
+.sidebar { width:220px; background:var(--bg-card); border-right:1px solid var(--border); display:flex; flex-direction:column; position:fixed; top:0; bottom:0; }
+.main { flex:1; margin-left:220px; padding:0; }
+
+/* Sidebar */
+.sidebar-brand { padding:20px 16px; border-bottom:1px solid var(--border); }
+.sidebar-brand h2 { color:var(--accent); font-size:1.3em; letter-spacing:2px; }
+.sidebar-brand span { color:var(--text-dim); font-size:0.75em; }
+.sidebar-nav { flex:1; padding:10px 0; overflow-y:auto; }
+.sidebar-nav a { display:flex; align-items:center; gap:10px; padding:10px 16px; color:var(--text-dim); text-decoration:none; font-size:0.9em; transition:all .15s; border-left:2px solid transparent; }
+.sidebar-nav a:hover { color:var(--text); background:var(--bg-hover); }
+.sidebar-nav a.active { color:var(--accent); border-left-color:var(--accent); background:var(--bg-hover); }
+.nav-section { padding:16px 16px 6px; font-size:0.7em; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; }
+.sidebar-footer { padding:16px; border-top:1px solid var(--border); font-size:0.8em; color:var(--text-dim); text-align:center; }
+
+/* Badge */
+.badge { padding:2px 8px; border-radius:10px; font-size:0.7em; font-weight:600; }
+.badge.on { background:#12261e; color:#3fb950; }
+.badge.off { background:#2d1b1e; color:var(--text-dim); }
+.badge.run { background:#12261e; color:#3fb950; }
+.badge.stop { background:#2d1b1e; color:#f85149; }
+.badge.warn { background:#2a2214; color:var(--yellow); }
+
+/* Main Header */
+.main-header { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; border-bottom:1px solid var(--border); background:var(--bg-card); }
+.main-header h1 { font-size:1.2em; }
+.header-actions { display:flex; gap:10px; align-items:center; }
+.main-content { padding:24px; }
+
+/* Cards */
+.grid { display:grid; gap:16px; margin-bottom:20px; }
+.grid-3 { grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); }
+.grid-2 { grid-template-columns:repeat(auto-fill,minmax(400px,1fr)); }
+.card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:20px; }
+.card h3 { color:var(--text-dim); font-size:0.85em; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px; }
+.card .value { font-size:1.8em; font-weight:700; margin:6px 0; }
+.card .sub { color:var(--text-dim); font-size:0.8em; }
+.card .pos { color:var(--up); }
+.card .neg { color:var(--down); }
+.card .neutral { color:var(--yellow); }
+
+/* Strategy Card */
+.strategy-card { display:flex; flex-direction:column; gap:12px; }
+.strategy-header { display:flex; justify-content:space-between; align-items:center; }
+.strategy-header h3 { color:var(--text); font-size:1em; margin:0; }
+.strategy-metrics { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.metric { background:var(--bg); border-radius:8px; padding:10px; }
+.metric .label { color:var(--text-dim); font-size:0.75em; }
+.metric .val { font-size:1.1em; font-weight:600; margin-top:2px; }
+
+/* Toggle Switch */
+.toggle { position:relative; width:44px; height:24px; background:var(--border); border-radius:12px; cursor:pointer; transition:background .2s; border:none; }
+.toggle::after { content:''; position:absolute; top:2px; left:2px; width:20px; height:20px; background:var(--text-dim); border-radius:50%; transition:all .2s; }
+.toggle.on { background:#1a3055; }
+.toggle.on::after { left:22px; background:#3fb950; }
+
+/* Table */
+table { width:100%; border-collapse:collapse; font-size:0.85em; }
+th { text-align:left; padding:10px 12px; color:var(--text-dim); font-weight:600; border-bottom:1px solid var(--border); background:var(--bg); }
+td { padding:8px 12px; border-bottom:1px solid var(--border); }
+tr:hover td { background:var(--bg-hover); }
+
+/* Button */
+.btn { padding:8px 16px; border-radius:6px; font-size:0.85em; cursor:pointer; border:1px solid var(--border); background:var(--bg-card); color:var(--text); transition:all .15s; text-decoration:none; display:inline-block; }
+.btn:hover { border-color:var(--accent); color:var(--accent); }
+.btn-primary { background:#1a3055; border-color:#2a4a75; color:var(--accent); }
+.btn-danger { background:#3d1a1a; border-color:#5c2a2a; color:var(--red); }
+.btn-ghost { background:transparent; }
+
+/* Chart Container */
+.chart-box { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:8px; margin-bottom:16px; }
+.chart-box .chart-title { padding:8px 12px; color:var(--text-dim); font-size:0.85em; }
+
+/* Status Colors */
+.c-up { color:var(--up); } .c-down { color:var(--down); }
+.c-yellow { color:var(--yellow); } .c-dim { color:var(--text-dim); }
+
+/* Signal Pill */
+.pill { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:16px; font-size:0.8em; font-weight:600; }
+.pill.buy { background:#3d1420; color:var(--up); }
+.pill.sell { background:#122a1a; color:var(--down); }
+.pill.hold { background:#2a2214; color:var(--yellow); }
+.pill.flat { background:var(--bg); color:var(--text-dim); }
+
+/* Responsive */
+@media (max-width:768px) {
+    .sidebar { display:none; }
+    .main { margin-left:0; }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-track { background:var(--bg); }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }

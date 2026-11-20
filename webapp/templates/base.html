@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Quant Strategy System{% endblock %}</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <h2>QUANT</h2>
+            <span>Strategy System</span>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="/" class="{% if page=='home' %}active{% endif %}">
+                <span class="icon">◈</span> 总览
+            </a>
+            <div class="nav-section">策略</div>
+            {% for sid, s in strategies.items() %}
+            <a href="/strategy/{{ sid }}" class="{% if page=='strategy_'+sid %}active{% endif %}">
+                <span class="icon">{{ '●' if s.enabled else '○' }}</span> {{ s.name }}
+                <span class="badge {{ 'on' if s.enabled else 'off' }}">{{ '展示中' if s.enabled else '已隐藏' }}</span>
+            </a>
+            {% endfor %}
+            <div class="nav-section">报告</div>
+            <a href="/reports/daily" class="{% if page=='reports_daily' %}active{% endif %}">
+                <span class="icon">▤</span> 每日报告
+            </a>
+            <a href="/reports/trades" class="{% if page=='reports_trades' %}active{% endif %}">
+                <span class="icon">≡</span> 交易记录
+            </a>
+            <div class="nav-section">系统</div>
+            <a href="/system" class="{% if page=='system' %}active{% endif %}">
+                <span class="icon">♥</span> 系统体检
+            </a>
+        </nav>
+        <div class="sidebar-footer">
+            <span id="clock">--:--:--</span>
+        </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+        <header class="main-header">
+            <h1>{% block header %}{% endblock %}</h1>
+            <div class="header-actions">
+                {% block actions %}{% endblock %}
+                <button class="btn btn-ghost" onclick="refreshQuotes(this)">刷新数据</button>
+            </div>
+        </header>
+        <div class="main-content">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+</div>
+<script src="/static/js/main.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

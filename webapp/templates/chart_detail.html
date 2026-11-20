@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} K线 - Z10 CTA{% endblock %}
+{% block header %}{{ name }} ({{ code }}) — Z10 CTA 信号图{% endblock %}
+{% block content %}
+<div class="chart-box">
+    <div id="mainChart" style="height:450px;"></div>
+</div>
+<div class="chart-box">
+    <div id="volChart" style="height:150px;"></div>
+</div>
+
+<div class="card" style="margin-top:20px">
+    <h3>{{ name }} 交易记录（{{ trades|length }} 笔，次日开盘成交口径）</h3>
+    <table>
+        <tr><th>#</th><th>方向</th><th>开仓日</th><th>开仓价</th><th>平仓日</th><th>平仓价</th><th>天数</th><th>净收益</th></tr>
+        {% for t in trades %}
+        <tr>
+            <td>{{ loop.index }}</td>
+            <td>{% if t.direction == 'L' %}<span class="pill buy">买开</span>{% else %}<span class="pill sell">卖开</span>{% endif %}</td>
+            <td>{{ t.entryDate }}</td>
+            <td>{{ t.entryPrice }}</td>
+            <td>{{ '—' if t.pending else t.exitDate }}</td>
+            {% if t.pending %}
+            <td>未平仓</td>
+            <td>—</td>
+            <td><span class="pill hold">未平仓</span></td>
+            {% else %}
+            <td>{{ t.exitPrice }}</td>
+            <td>{{ t.holdDays }}</td>
+            <td class="{{ 'c-up' if t.netRet > 0 else 'c-down' }}">{{ "%+.1f%%"|format(t.netRet*100) }}</td>
+            {% endif %}
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+fetch('/api/chart/{{ sym }}')
+    .then(r => r.json())
+    .then(data => {
+        const chart = LightweightCharts.createChart(document.getElementById('mainChart'), {
+            layout: { background:{type:'solid',color:'#161b22'}, textColor:'#8b949e' },
+            grid: { vertLines:{color:'#30363d'}, horzLines:{color:'#30363d'} },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            timeScale: { borderColor:'#30363d' },
+        });
+        const candle = chart.addCandlestickSeries({
+            upColor:'#ef4444', downColor:'#22c55e',
+            borderUpColor:'#ef4444', borderDownColor:'#22c55e',
+        });
+        candle.setData(data.candles);
+        const ma = chart.addLineSeries({ color:'#58a6ff', lineWidth:1 });
+        ma.setData(data.ma20);
+
+        const markers = [];
+        data.trades.forEach(t => {
+            if (t.pending) return;  // 未平仓交易不画标记
+            const et = Math.floor(new Date(t.entryDate).getTime()/1000);
+            const xt = Math.floor(new Date(t.exitDate).getTime()/1000);
+            const ret = (t.netRet*100).toFixed(0);
+            if (t.direction === 'L') {
+                markers.push({time:et, position:'belowBar', color:'#ef4444', shape:'arrowUp', text:'买开'});
+                markers.push({time:xt, position:'aboveBar', color:'#ef4444', shape:'arrowDown', text:'卖平 ' + ret + '%'});
+            } else {
+                markers.push({time:et, position:'aboveBar', color:'#22c55e', shape:'arrowDown', text:'卖开'});
+                markers.push({time:xt, position:'belowBar', color:'#22c55e', shape:'arrowUp', text:'买平 ' + ret + '%'});
+            }
+        });
+        candle.setMarkers(markers.sort((a,b)=>a.time-b.time));
+
+        const vol = LightweightCharts.createChart(document.getElementById('volChart'), {
+            layout:{background:{type:'solid',color:'#161b22'}, textColor:'#8b949e'},
+            grid:{vertLines:{color:'#30363d'}, horzLines:{color:'#30363d'}},
+            timeScale:{borderColor:'#30363d'},
+        });
+        const volSeries = vol.addAreaSeries({
+            lineColor:'#d29922', topColor:'rgba(210,153,34,0.3)', bottomColor:'rgba(210,153,34,0)'
+        });
+        volSeries.setData(data.volPct);
+        volSeries.createPriceLine({price:0.20, color:'#f85149', lineWidth:1, lineStyle:2, title:'20%'});
+
+        chart.timeScale().fitContent();
+        vol.timeScale().fitContent();
+    });
+</script>
+{% endblock %}

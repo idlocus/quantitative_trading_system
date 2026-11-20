@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}G1 A股 - Quant Strategy System{% endblock %}
+{% block header %}G1 A股策略 — 低波动+价值每日决策{% endblock %}
+{% block actions %}
+<button class="toggle {{ 'on' if enabled else '' }}" onclick="toggleStrategy('g1', this)"></button>
+{% endblock %}
+{% block content %}
+<div class="grid grid-3" style="grid-template-columns:repeat(4,1fr)">
+    <div class="card">
+        <h3>样本外年化</h3>
+        <div class="value pos">{{ strategies.g1.ann_ret }}</div>
+        <div class="sub">2024-2026 holdout</div>
+    </div>
+    <div class="card">
+        <h3>最大回撤</h3>
+        <div class="value neg">{{ strategies.g1.max_dd }}</div>
+        <div class="sub">样本外</div>
+    </div>
+    <div class="card">
+        <h3>策略形态</h3>
+        <div class="value" style="font-size:1em">D16低波+BP价值</div>
+        <div class="sub">缓冲带K100 | N50 | guard</div>
+    </div>
+    <div class="card">
+        <h3>与CTA相关性</h3>
+        <div class="value pos">待检验</div>
+        <div class="sub">缺少同区间检验</div>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom:20px">
+    <h3>策略规则（每日决策函数）</h3>
+    <div style="padding:12px 20px; line-height:1.8; font-size:0.9em; color:var(--text-dim)">
+        <p><b style="color:var(--text)">卖出</b>：持仓中排名跌出前100名的 → 次日开盘卖出</p>
+        <p><b style="color:var(--text)">不动</b>：排名仍在前100名 → 继续持有</p>
+        <p><b style="color:var(--text)">买入</b>：排序前50名中未持有的 → 买入至满50只</p>
+        <p><b style="color:var(--text)">风控</b>：guard双15%红线（月亏损/历史峰值回撤）</p>
+    </div>
+</div>
+
+<div class="card">
+    <h3>当前运行状态</h3>
+    <table>
+        <tr><th>指标</th><th>值</th></tr>
+        <tr><td>策略状态</td><td>{{ '展示中' if enabled else '已隐藏' }}</td></tr>
+        <tr><td>信号来源</td><td>D16低波动 + BP价值 rank均值</td></tr>
+        <tr><td>排除规则</td><td>亏损(pe缺失) + 趋势过热(D7≥90%)</td></tr>
+        <tr><td>持有规则</td><td>跌出前100名卖出</td></tr>
+        <tr><td>组合规模</td><td>50只等权</td></tr>
+        <tr><td>调仓频率</td><td>每日评估（缓冲带控制实际换手）</td></tr>
+    </table>
+</div>
+
+<div class="card">
+    <h3>完整规格</h3>
+    <p style="color:var(--text-dim); font-size:0.85em">
+        详细的策略规格、参数锁定依据（155+条登记）、检验结果，请参考
+        <a href="#" style="color:var(--accent)">docs/DAILY_STRATEGY_SPEC.md</a>
+    </p>
+</div>
+{% endblock %}
